@@ -6,6 +6,7 @@ import torch.optim as optim
 
 from sympy import Symbol, Function, Rational
 from sympy import sqrt as sym_sqrt
+import sympy as sp
 from physicsnemo.sym.eq.pde import PDE
 from physicsnemo.sym.eq.phy_informer import PhysicsInformer
 from physicsnemo.sym.key import Key
@@ -153,6 +154,40 @@ class StrainRateNoShear(MeshMotionBulk):
         # Euclidean norm of stress tensor (squared)
         self.equations = {"strain_norm": sym_sqrt(2 * (e_xy**2 + e_xz**2 + e_yz**2))}
 
+class mu313(MeshMotionBulk):
+    def __init__(self, tau_0=1e-3):
+        super().__init__()
+        self.tau_0 = tau_0
+        self._define_equations(tau_0)
+
+    def _define_equations(self, tau_0):
+        x, y, z = self.x, self.y, self.z
+        u, v, w = self.u, self.v, self.w
+
+        U = sp.Matrix([u,v,w])
+
+        grad_U = U.jacobian([x,y,z])
+
+        I = sp.eye(3)
+
+        T = I + grad_U
+
+        tau = T.det()
+        norm_sq = (T.T * T).trace()
+        Tmt = T.T.inv()
+
+        dmu_dT = 2/3 * (tau - tau_0)**(-2/3) * (T - norm_sq * tau / (3* (tau-tau_0)) * Tmt)
+
+        system_ = sp.Matrix([
+                sp.diff(dmu_dT[i,0], x) + sp.diff(dmu_dT[i,1], y) + sp.diff(dmu_dT[i,2], z)
+                for i in range(3)
+            ])
+
+        self.equations = {
+            "xeq": system_[0],
+            "yeq": system_[1],
+            "zeq": system_[2],
+        }
 
 class PINNTrainer(ABC):
     def __init__(

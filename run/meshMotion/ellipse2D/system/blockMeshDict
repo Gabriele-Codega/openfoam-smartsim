@@ -1,0 +1,80 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+| =========                 |                                                 |
+| \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox           |
+|  \\    /   O peration     | Version:  dev                                  |
+|   \\  /    A nd           | www.openfoam.com                                |
+|    \\/     M anipulation  |                                                 |
+\*---------------------------------------------------------------------------*/
+
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      blockMeshDict;
+}
+
+// convertToMeters 2000.0;
+scale 2000.0;
+
+// Cube from (-11,-11,-11) to (11,11,11) ⇒ L = 22
+vertices
+(
+    (-0.005 -0.005 0.0045)
+    ( 0.005 -0.005 0.0045)
+    ( 0.005  0.005 0.0045)
+    (-0.005  0.005 0.0045)
+    (-0.005 -0.005 0.0055)
+    ( 0.005 -0.005 0.0055)
+    ( 0.005  0.005 0.0055)
+    (-0.005  0.005 0.0055)
+);
+
+blocks
+(
+    // hex (vertexIDs) (nX nY nZ) grading
+    hex (0 1 2 3 4 5 6 7) (11 11 1) simpleGrading (1 1 1)
+);
+
+edges
+(
+    // no curved edges
+);
+
+boundary
+(
+    back
+    {
+        type empty;
+        faces
+        (
+            (0 1 2 3)
+        );
+    }
+    front
+    {
+        type empty;
+        faces
+        (
+            (4 5 6 7)
+        );
+    }
+    domainWalls
+    {
+        type wall;
+        faces
+        (
+            (0 4 7 3)
+            (1 2 6 5)
+            (0 1 5 4)
+            (2 3 7 6)
+//            (0 3 2 1)
+//            (4 5 6 7)
+        );
+    }
+);
+
+mergePatchPairs
+(
+    // none
+);

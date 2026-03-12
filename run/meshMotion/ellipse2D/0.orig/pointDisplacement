@@ -1,0 +1,60 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+| =========                 |                                                 |
+| \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox           |
+|  \\    /   O peration     | Version:  v2312                                 |
+|   \\  /    A nd           | Website:  www.openfoam.com                      |
+|    \\/     M anipulation  |                                                 |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       pointVectorField;
+    object      pointDisplacement;
+}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+dimensions      [0 1 0 0 0 0 0];
+
+internalField   uniform (0 0 0);
+
+boundaryField
+{
+    cylinder
+    {
+        type        solidBodyMotionDisplacement;
+        solidBodyMotionFunction  multiMotion; 
+        multiMotionCoeffs
+        {
+            translation
+            {
+                // solidBodyMotionFunction  linearMotion;
+                solidBodyMotionFunction  oscillatingLinearMotion;
+                oscillatingLinearMotionCoeffs
+                {
+                    amplitude (-5 -5 0);
+                    omega 3.1416;
+                }
+            }
+            rotation
+            {
+                solidBodyMotionFunction oscillatingRotatingMotion;
+                oscillatingRotatingMotionCoeffs
+                {
+                    origin      (0 0 0);
+                    amplitude   (0 0 12.5664);
+                    omega       3.1416; 
+                }
+            }
+        }
+    }
+
+    ".*"
+    {
+        type            fixedValue;
+        value           uniform (0 0 0);
+    }
+}
+
+
+// ************************************************************************* //

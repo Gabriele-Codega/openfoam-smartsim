@@ -3,24 +3,16 @@ cd "${0%/*}" || exit                                # Run from this directory
 . ${WM_PROJECT_DIR:?}/bin/tools/RunFunctions        # Tutorial run functions
 #------------------------------------------------------------------------------
 
-if [ $# -eq 0 ]
-then
-    pinn_type="NavierCauchy3d"
-else
-    pinn_type="$1"
-fi
-
-rm -rf ellipsoid3D_input
-rm -rf meshMotion_ellipsoid3D_input_PINN_"${pinn_type}"
+rm -rf input_ellipse2D
+rm -rf meshMotion_ellipse2D
 
 echo Create the machine learning mesh motion case
 (
-    cp -r ellipsoid3D ellipsoid3D_input
+    cp -r ellipse2D input_ellipse2D
 
-    cd ellipsoid3D_input
-
+    cd input_ellipse2D
     echo Create .foam file for visualization in ParaView 
-    touch ellipsoid3D_MachineLearningMeshMotion.foam
+    touch case.foam
     
     echo Set mesh motion settings to MachineLearning mesh motion
     cp constant/dynamicMeshDict.smartsim constant/dynamicMeshDict
@@ -31,10 +23,9 @@ echo Create the machine learning mesh motion case
     cd ..
 
     echo Run the smartsim_driver that coordinates Machine Learning and CFD 
-    python smartsim_driver.py --case ellipsoid3D_input \
-        --pinn-type "${pinn_type}"
+    python tmop_smartsim_driver.py --case input_ellipse2D
 
-    cd meshMotion_ellipsoid3D_input_PINN_"${pinn_type}"/ellipsoid3D_input
+    cd meshMotion_input_ellipse2D/input_ellipse2D
 
     # Compute the mesh quality fields 
     runParallel checkMesh -writeFields '(nonOrthoAngle skewness cellVolume)' -time '0:'

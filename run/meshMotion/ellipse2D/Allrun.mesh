@@ -1,0 +1,19 @@
+#!/bin/sh
+cd "${0%/*}" || exit                                # Run from this directory
+. ${WM_PROJECT_DIR:?}/bin/tools/RunFunctions        # Tutorial run functions
+#------------------------------------------------------------------------------
+
+restore0dir
+
+rm -rf constant/polyMesh
+
+blockMesh
+
+# Use snappy to create a 3d mesh
+snappyHexMesh -overwrite
+
+# Extrude the mesh from the "front" patch to create a 2.5d simulation
+extrudeMesh
+
+# Decompose the mesh 
+decomposePar -force

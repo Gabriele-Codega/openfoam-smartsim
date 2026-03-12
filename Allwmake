@@ -49,6 +49,7 @@ wmake libso src/smartRedis
 wmake libso src/functionObjects
 wmake libso src/fvMotionSolvers/displacementLaplacianNonOrthMotionSolver
 wmake libso src/fvMotionSolvers/displacementSmartSimMotionSolver
+wmake libso src/fvMotionSolvers/tmopMotionSolver
 
 
 ## Compile OpenFOAM utilities
