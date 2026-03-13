@@ -1,13 +1,12 @@
-from tmopmesh import TMOPMesh
-from tmopmetrics import *
-from shape_functions import *
-from voromeshutils import *
+from tmop import Config, TMOPMesh, METRIC_REGISTRY, SHAPE_REGISTRY
 
 import torch
 import numpy as np
 from smartredis import Client
 
-import argparse
+from jsonargparse import ArgumentParser
+
+import inspect
 import time
 import os
 from functools import partial
@@ -26,7 +25,6 @@ displacements_key = lambda i: f"displacements_MPI_{i}"
 elements_key = lambda i: f"elements_MPI_{i}"
 
 default_device = "cuda" if torch.cuda.is_available() else "cpu"
-# default_device = "cpu"
 
 def retrieve_point_fields(client, mpi_ranks, key_constructor):
     point_field_by_rank = {r: client.get_tensor(key_constructor(r)) for r in mpi_ranks}
@@ -46,6 +44,22 @@ def retrieve_point_fields(client, mpi_ranks, key_constructor):
 def main(args):
 
     mpi_ranks = range(args.mpi_ranks)
+    dev = args.device if args.device else default_device
+
+    tmopargs = args.tmop
+    shape_fn = SHAPE_REGISTRY[tmopargs.shape.shape_fn]
+
+    metric_fn = METRIC_REGISTRY[tmopargs.metric.metric_fn]
+    sig = inspect.signature(metric_fn)
+    metric_args = sig.parameters
+    if ("gamma" in metric_args) and (tmopargs.metric.gamma is not None):
+        metric_fn = partial(metric_fn, gamma=tmopargs.metric.gamma)
+    elif ("gamma" in metric_args) and (tmopargs.metric.gamma is None):
+        print(f"Metric {tmopargs.metric.metric_fn} requires parameter `gamma` but got {tmopargs.metric.gamma}. Defaulting to `gamma = 0.5`.")
+        metric_fn = partial(metric_fn, gamma=0.5)
+    elif ("gamma" not in metric_args) and (tmopargs.metric.gamma is not None):
+        print(f"Metric {tmopargs.metric.metric_fn} does not require parameter `gamma`. Ignoring supplied value.")
+
     client = Client()
 
     log_db_address = os.getenv("LOG_DB")
@@ -54,6 +68,7 @@ def main(args):
     else:
         print("Could not find Redis DB for logging")
         log_client = None
+
     # Pause until the OpenFOAM simulation has posted the boundary points
     elements_ready = client.poll_key("elements_MPI_0", 1, 60000)
     if not elements_ready:
@@ -98,14 +113,13 @@ def main(args):
                  interior_ids=int_ids,
                  # elements=elements,
                  elements=torch.from_numpy(elements_padded),
-                 basis_functions = stable_mean_value_coordinates,
-                 regular_reference = True,
-                 n_sample_points = 80,
-                 tmop_metric = partial(mu_66, gamma=0.5),
-                 # tmop_metric = mu_4,
-                 untangle = True,
-                 c = 1e-3,
-                 d = 1e-3,
+                 basis_functions = shape_fn,
+                 regular_reference = tmopargs.shape.regular_ref,
+                 n_sample_points = tmopargs.shape.n_samples,
+                 tmop_metric = metric_fn,
+                 untangle = tmopargs.metric.untangle,
+                 c = tmopargs.metric.c,
+                 d = tmopargs.metric.d,
                  log_client = log_client
         )
     print(f"{tmesh.n_pts} points: {tmesh.n_bd_pts} boundary, {tmesh.n_int_pts} interior.\n{tmesh.n_elements} elements")
@@ -115,7 +129,7 @@ def main(args):
     #         torch.tensor([[1.,0],
     #                       [0,1.]])
 
-    tmesh.to(default_device)
+    tmesh.to(dev)
 
     # fig, ax = plt.subplots(1,1,figsize=(10,10))
     # with torch.no_grad():
@@ -143,14 +157,17 @@ def main(args):
         newp = points0.copy()
         newp[disp_gids] += displacements
         with torch.no_grad():
-            tmesh.bd_pts.copy_(torch.from_numpy(newp[bd_ids]).to(default_device))
+            tmesh.bd_pts.copy_(torch.from_numpy(newp[bd_ids]).to(dev))
 
         # with torch.no_grad():
         #     plot_mesh(tmesh.pts, tmesh.elements, ax=ax, fill_kwargs = {'edgecolor': 'r', 'facecolor': 'none', 'alpha':0.6, 'lw': .5})
         #     fig.savefig("during.png",dpi=300)
         # optimise. TODO: lr, max epochs, patience, rtol as runtime arguments (or from config file)
-        optim = torch.optim.Adam(tmesh.parameters(), lr = 8e-3);
-        tmesh.optimise(optim, 500, patience = 30, rtol=1e-2)
+        optim = torch.optim.Adam(tmesh.parameters(), lr = tmopargs.optim.lr);
+        tmesh.optimise(optim,
+                       tmopargs.optim.max_steps,
+                       patience = tmopargs.optim.patience,
+                       rtol=tmopargs.optim.rtol)
 
         # with torch.no_grad():
         #     ax.clear()
@@ -175,20 +192,12 @@ def main(args):
         timestep += 1
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Training script for mesh motion")
-    parser.add_argument("mpi_ranks", help="number of mpi ranks", type=int)
-    parser.add_argument(
-        "--max_epochs",
-        help="Maximum number of training epochs per timestep",
-        type=int,
-        default=1000
-        )
-    parser.add_argument(
-        "--device",
-        help="The device to deploy the ML tasks on",
-        default=default_device
-    )
-    args = parser.parse_args()
+    parser = ArgumentParser(description="TMOP optimisation for mesh motion")
+    parser.add_argument("--config", action="config")
+    parser.add_class_arguments(Config, "cfg")
 
-    main(args)
+    args = parser.parse_args()
+    cfg: Config = args.cfg
+
+    main(cfg)
     exit()

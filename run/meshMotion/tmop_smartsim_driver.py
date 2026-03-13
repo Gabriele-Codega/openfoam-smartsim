@@ -95,7 +95,7 @@ def main(args):
 
     tmop_rs = exp.create_run_settings(
         exe="python",
-        exe_args=f"tmop_motion.py {num_mpi_ranks}",
+        exe_args=f"tmop_motion.py --config config.yaml --cfg.mpi_ranks {num_mpi_ranks}",
         env_vars={"LOG_DB": log_db.get_address()[0]}
     )
     tmop_rs.set_tasks(1)
@@ -107,7 +107,8 @@ def main(args):
         run_settings=tmop_rs
     )
     tmop_motion.attach_generator_files(
-        to_copy=["tmop_motion.py", "tmop/tmopmesh.py", "tmop/tmopmetrics.py", "tmop/shape_functions.py", "tmop/voromeshutils.py"]
+        to_copy=["tmop_motion.py", "config.yaml"],
+        to_symlink=["./tmop"]
     )
 
     exp.generate(tmop_motion, overwrite=True)

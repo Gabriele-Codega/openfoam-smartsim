@@ -1,11 +1,19 @@
 import torch
 
+SHAPE_REGISTRY = {}
+
+def register_shape(fn):
+    SHAPE_REGISTRY[fn.__name__] = fn
+    return fn
+
+@register_shape
 def barycentric_coordinates(p, vertices=None):
     """
     Barycentric coordinates on unit triangle (0,0),(1,0),(0,1).
     """
     return torch.stack([1-p[...,0]-p[...,1], p[...,0], p[...,1]],dim=-1)
 
+@register_shape
 def laplace_coordinates(p, vertices):
     device = vertices.device
     dtype = vertices.dtype
@@ -60,28 +68,30 @@ def laplace_coordinates(p, vertices):
 
     cs = torch.stack(cs_list)
 
-    
+
     s = torch.stack( [ torch.linalg.norm( cs[i] - cs[i-1] ) for i in range(n_sides) ] )
     h = torch.stack( [ torch.linalg.norm( vertices[i] - p ) for i in range(n_sides) ] )
     alpha = s/h
     return alpha/alpha.sum()
 
+@register_shape
 def mean_value_coordinates(p, vertices):
     d = vertices - p.unsqueeze(0)
     r = torch.linalg.norm(d,dim=1)
     e = d/r.unsqueeze(-1)
     e_p = torch.roll(e,-1,0)
-    
+
     cos = torch.linalg.vecdot(e,e_p) 
     sin = torch.linalg.det( torch.stack((e,e_p),dim=-1) ) 
     tan = sin/(1+cos)
 
     tan_m =  torch.roll(tan,1,0)
-    
+
     w = (tan_m + tan)/r
     return w/w.sum()
 
-    
+
+@register_shape
 def mean_value_coordiantes_global(p,vertices):
     eps = 1e-12
     n = vertices.shape[0]
@@ -90,7 +100,7 @@ def mean_value_coordiantes_global(p,vertices):
 
     dp = torch.roll(d,1,dims=0)
     dn = torch.roll(d,-1,dims=0)
-    
+
     rp = torch.roll(r,1,dims=0)
     rn = torch.roll(r,-1,dims=0)
 
@@ -119,6 +129,7 @@ def _angle(a, b):
 
 # this version seems the most stable for mvc.
 # Implementation in the paper is different though
+@register_shape
 def stable_mean_value_coordinates(p,vertices):
     n = vertices.shape[0]
     d = vertices - p.unsqueeze(0)
@@ -126,7 +137,7 @@ def stable_mean_value_coordinates(p,vertices):
 
     dp = torch.roll(d,1,dims=0)
     dn = torch.roll(d,-1,dims=0)
-    
+
     rp = torch.roll(r,1,dims=0)
     rn = torch.roll(r,-1,dims=0)
 
