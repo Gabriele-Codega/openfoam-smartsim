@@ -1,5 +1,6 @@
+import torch
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Optional, Type
 
 @dataclass
 class ShapeConfig:
@@ -16,8 +17,15 @@ class MetricConfig:
     d: float = 1e-3 # probably can be optional
 
 @dataclass
+class TargetConfig:
+    preserve_size:          bool = True
+    preserve_orientation:   bool = True
+    preserve_skewness:      bool = True
+    preserve_aspect:        bool = True
+
+@dataclass
 class OptimConfig:
-    #TODO: select optimiser as well
+    optimiser: Type[torch.optim.Optimizer] = torch.optim.Adam
     lr: float = 1e-3
     max_steps: int = 1000
     patience: int = 50
@@ -27,6 +35,7 @@ class OptimConfig:
 class TMOPConfig:
     shape:  ShapeConfig     = field(default_factory=ShapeConfig)
     metric: MetricConfig    = field(default_factory=MetricConfig)
+    target: TargetConfig    = field(default_factory=TargetConfig)
     optim:  OptimConfig     = field(default_factory=OptimConfig)
 
 @dataclass

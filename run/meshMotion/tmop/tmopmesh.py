@@ -1,10 +1,16 @@
-import sys
 import torch
 import torch.nn as nn
-import numpy as np
 from torch.func import jacrev, vmap
+import numpy as np
+
+import sys
 from math import sin, cos
 from functools import partial
+import inspect
+
+from .configutils import TMOPConfig
+from .shape_functions import SHAPE_REGISTRY
+from .tmopmetrics import METRIC_REGISTRY
 
 torch.set_default_dtype(torch.float64)
 
@@ -15,13 +21,7 @@ class TMOPMesh(nn.Module):
                  boundary_ids,
                  interior_ids,
                  elements,
-                 basis_functions = None,
-                 regular_reference = True,
-                 n_sample_points = 5,
-                 tmop_metric = None,
-                 untangle = False,
-                 c = 1e-3,
-                 d = 1e-3,
+                 config: TMOPConfig = TMOPConfig(),
                  log_client = None 
                 ):
         super().__init__()
@@ -29,17 +29,8 @@ class TMOPMesh(nn.Module):
         self.n_bd_pts = boundary_points.shape[0]
         self.n_int_pts = interior_points.shape[0]
         self.n_pts = self.n_bd_pts + self.n_int_pts
-
         self.spacedim = boundary_points.shape[-1]
-        self.regular_reference = regular_reference
-        if regular_reference == False:
-            raise ValueError("Non-regular reference not quite supported yet.")
-        if self.spacedim == 3 and regular_reference == True:
-            print("Regular n-gon as reference is not supported in 3D. Falling back to SVD.")
-            self.regular_reference = False
 
-
-        # self.bd_pts = boundary_points.detach()
         self.register_buffer( "bd_pts", boundary_points.detach()) # boundary points are buffers, so they are fixed
         self.int_pts = nn.Parameter(interior_points.detach()) # interior points are parameters, so they can be optimised
         self.boundary_ids = boundary_ids
@@ -54,16 +45,22 @@ class TMOPMesh(nn.Module):
         )
 
         self.elements = elements # assume elements are a padded tensor of node ids
-        # self.n_elements = len(elements)
-        # self.n_sides = torch.tensor([len(el) for el in elements], dtype=torch.int64)
         self.n_elements = elements.shape[0]
         self.n_sides = torch.sum(elements >= 0, dim=1, dtype=torch.int)
         self.n_sides_unique, self.n_sides_count = torch.unique(self.n_sides, return_counts=True)
 
+
+        shape_config = config.shape
+        self.shape = SHAPE_REGISTRY[shape_config.shape_fn]
+        self.regular_reference = shape_config.regular_ref
+        if self.regular_reference == False:
+            raise ValueError("Non-regular reference not quite supported yet.")
+        if self.spacedim == 3 and self.regular_reference == True:
+            print("Regular n-gon as reference is not supported in 3D. Falling back to SVD.")
+            self.regular_reference = False
         self._make_ref_elements()
 
-        self.basis = basis_functions
-        self.n_sample_pts = n_sample_points
+        self.n_sample_pts = shape_config.n_samples
         self._sample_ref_element()
 
         # These two register buffers for shape values and gradients
@@ -87,23 +84,32 @@ class TMOPMesh(nn.Module):
             shape_grad_all[i,:,:n_sides] = g
         self.register_buffer("shape_grad_all", shape_grad_all.detach())
 
-        self.mu = tmop_metric
-        self.untangle = untangle
+        metric_config = config.metric
+
+        metric_fn = METRIC_REGISTRY[metric_config.metric_fn]
+        gamma = metric_config.gamma
+        sig = inspect.signature(metric_fn)
+        metric_args = sig.parameters
+        if ("gamma" in metric_args) and (gamma is not None):
+            metric_fn = partial(metric_fn, gamma=gamma)
+        elif ("gamma" in metric_args) and (gamma is None):
+            print(f"Metric {metric_config.metric_fn} requires parameter `gamma` but got {gamma}. Defaulting to `gamma = 0.5`.")
+            metric_fn = partial(metric_fn, gamma=0.5)
+        elif ("gamma" not in metric_args) and (gamma is not None):
+            print(f"Metric {metric_config.metric_fn} does not require parameter `gamma`. Ignoring supplied value.")
+
+        self.mu = metric_fn
+        self.untangle = metric_config.untangle
         # parameters for untangling metric
-        self.c = c
-        self.d = d
+        self.c = metric_config.c
+        self.d = metric_config.d
 
-        # Set the target W somehow.
-        # Either initialise to None, and set later in the main code,
-        # or set W to match the initial mesh.
-        # TODO:: add a flag or some runtime arg to control W creation.
-
-        # self._W = None
-        # set W as the jacobian of map from reference to original mesh
-        pts_all = self.pts[self.elements]
-        W = torch.einsum("epsi,esj->epij", self.shape_grad_all, pts_all) # (n_elements, n_samples, n_sides, spacedim), (n_elements, n_sides, spacedim) -> (n_elements, n_samples, spacedim, spacedim)
-        self.register_buffer("W", W.detach())
-        # self.register_buffer("W", torch.eye(self.spacedim))
+        # Set the target W.
+        # NOTE: might want to implement a TargetFactory class
+        # for finer control over the target (preserve original,
+        # regular ngon, user defined...)
+        target_config = config.target
+        self._make_target(target_config)
 
         # Allows smartsim driver to log progress of optimisation to stdout
         if log_client:
@@ -114,7 +120,7 @@ class TMOPMesh(nn.Module):
         return torch.cat([self.bd_pts, self.int_pts], dim=0)[self.inverse_perm]
 
     def map_element(self, ref_coords, ref_element, physical_node_ids):
-        return self.basis(ref_coords, ref_element) @ self.pts[physical_node_ids]
+        return self.shape(ref_coords, ref_element) @ self.pts[physical_node_ids]
 
     def _make_ref_elements(self):
         if self.regular_reference:
@@ -163,8 +169,6 @@ class TMOPMesh(nn.Module):
                 name = f"samples_{n_sides}"
                 self.register_buffer(name, torch.vstack(samples).detach())
                 self.sample_points[n_sides] = name
-                # self.sample_points[n_sides] = getattr(self, name)
-                # self.sample_points[n_sides] = torch.vstack(samples).detach()#.requires_grad_(True)
         else:
             self.sample_points = []
             for i in range(self.n_elements):
@@ -184,34 +188,26 @@ class TMOPMesh(nn.Module):
                 name = f"samples_{i}"
                 self.register_buffer(name, torch.vstack(samples).detach())
                 self.sample_points.append(name)
-                # self.sample_points.append(getattr(self, name))
-                # self.sample_points.append(torch.vstack(samples).detach())#.requires_grad_(True))
 
     def _evaluate_shape(self):
         if self.regular_reference:
             self.shape_vals = {}
             for n_sides, ref_el in self.ref_elements.items():
-                # samples = self.sample_points[n_sides]
                 samples = getattr(self, self.sample_points[n_sides])
                 name = f"_shape_vals_{n_sides}"
-                self.register_buffer(name, vmap(self.basis, in_dims=(0,None))(samples, ref_el))
+                self.register_buffer(name, vmap(self.shape, in_dims=(0,None))(samples, ref_el))
                 self.shape_vals[n_sides] = name
-                # self.shape_vals[n_sides] = getattr(self, name)
-                # self.shape_vals[n_sides] = vmap(self.basis, in_dims=(0,None))(samples, ref_el)
         else:
             self.shape_vals = []
             for i in range(self.n_elements):
                 ref_el = self.ref_elements[i]
-                # samples = self.sample_points[i]
                 samples = getattr(self, self.sample_points[i])
                 name = f"_shape_vals_{i}"
-                self.register_buffer(name, vmap(self.basis, in_dims=(0,None))(samples, ref_el))
+                self.register_buffer(name, vmap(self.shape, in_dims=(0,None))(samples, ref_el))
                 self.shape_vals.append(name)
-                # self.shape_vals.append(getattr(self, name))
-                # self.shape_vals.append(vmap(self.basis, in_dims=(0,None))(samples, ref_el))
         
     def _evaluate_shape_grad(self):
-        _grad = jacrev(self.basis, argnums=0) # NOTE: this is not stable wit jacfwd
+        _grad = jacrev(self.shape, argnums=0) # NOTE: this is not stable wit jacfwd
         if self.regular_reference:
             self.shape_grad = {}
             for n_sides, ref_el in self.ref_elements.items():
@@ -234,6 +230,67 @@ class TMOPMesh(nn.Module):
                 # self.shape_grad.append(getattr(self, name))
                 # self.shape_grad.append(vmap(_grad, in_dims=(0,None))(samples, ref_el))
 
+    def _make_target(self, config):
+        pts_all = self.pts[self.elements]
+        W0 = torch.einsum("epsi,esj->epij", self.shape_grad_all, pts_all).detach() # (n_elements, n_samples, n_sides, spacedim), (n_elements, n_sides, spacedim) -> (n_elements, n_samples, spacedim, spacedim)
+        _ps = config.preserve_size
+        _po = config.preserve_orientation
+        _pq = config.preserve_skewness
+        _pa = config.preserve_aspect
+
+        if (_ps and _po and _pq and _pa):
+            self.register_buffer("W",W0)
+            return
+
+        w1 = W0[...,0]
+        w2 = W0[...,1]
+        n1 = torch.linalg.norm(w1,dim=-1)
+        n2 = torch.linalg.norm(w2,dim=-1)
+        w1_orth = torch.stack((-w1[...,1], w1[...,0]),dim=-1)
+
+        zeta = n1*n2 if _ps else torch.ones_like(n1)
+
+        if _po :
+            cos_theta = W0[...,0,0]/n1
+            sin_theta = W0[...,1,0]/n1
+            R = torch.stack([
+                torch.stack([cos_theta, -sin_theta], dim = -1),
+                torch.stack([sin_theta,  cos_theta], dim = -1)],
+                dim = -2
+            )
+        else:
+            R = torch.eye(self.spacedim)
+
+        if _pq :
+            cos_phi = torch.linalg.vecdot(w1,w2)/(n1*n2)
+            sin_phi = torch.linalg.vecdot(w1_orth,w2)/(n1*n2)
+        else:
+            phi = (self.n_sides - 2) * torch.pi / self.n_sides
+            cos_phi = torch.cos(phi)
+            sin_phi = torch.sin(phi)
+
+        Q = torch.stack([
+            torch.stack([torch.ones_like(cos_phi) , cos_phi], dim = -1),
+            torch.stack([torch.zeros_like(cos_phi), sin_phi], dim = -1)],
+            dim = -2
+        )
+        if not _pq:
+            Q = Q.unsqueeze(1)
+            Q = Q.repeat(1,self.n_sample_pts,1,1)
+
+        if _pa :
+            rho = torch.sqrt(n2/n1)
+            delta = torch.stack([
+                torch.stack([1./rho, torch.zeros_like(rho)], dim = -1),
+                torch.stack([torch.zeros_like(rho), rho], dim = -1)],
+                dim = -2
+            )
+        else:
+            delta = torch.eye(self.spacedim)
+
+        W = torch.sqrt(zeta)[...,None,None]*torch.matmul(R, torch.matmul(Q,delta))
+        self.register_buffer("W", W.detach())
+
     def _mapping_jacobian_regular(self, element):
         n_sides = len(element)
         # print(self.shape_grad[n_sides].device)
@@ -243,13 +300,6 @@ class TMOPMesh(nn.Module):
         shape = self.shape_grad[idx]
         x = self.pts[self.elements[idx]]
         return torch.einsum("psd,se->pde", shape, x) # (n_samples, n_sides, spacedim), (n_sides, spacedim) -> (n_samples, spacedim, spacedim)
-
-    # @property
-    # def W(self):
-    #     return self._W
-    # @W.setter
-    # def W(self,new_W):
-    #     self._W = new_W
 
     def optimise(self, optimiser, max_epochs, patience=50, rtol=1e-2):
         W_inv = torch.linalg.inv(self.W) ## TODO: W should be a function of space as well (or something to allow for different W for different physical elements)
@@ -303,7 +353,7 @@ class TMOPMesh(nn.Module):
                     else:
                         epochs_since_improvement += 1
 
-                # no idea why it's called wcuo
+                # wcuo as in Worst Case Untangle Optimise (or something like that)
                 wcuo = mu_hat/(beta - mu_hat)
                 loss = wcuo.mean()
             else:

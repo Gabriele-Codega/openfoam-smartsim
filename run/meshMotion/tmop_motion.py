@@ -1,22 +1,18 @@
-from tmop import Config, TMOPMesh, METRIC_REGISTRY, SHAPE_REGISTRY
+from tmop import Config, TMOPMesh
 
 import torch
 import numpy as np
 from smartredis import Client
+try:
+    import soap
+except:
+    pass
 
 from jsonargparse import ArgumentParser
-
-import inspect
 import time
 import os
-from functools import partial
-from math import sqrt
 
 torch.set_default_dtype(torch.float64)
-
-import matplotlib.pyplot as plt
-
-## TODO: matplotlib params (font, colors, etc.)
 
 bulk_points_key = lambda i: f"points_MPI_{i}"
 indices_key = lambda i: f"indices_MPI_{i}"
@@ -47,18 +43,6 @@ def main(args):
     dev = args.device if args.device else default_device
 
     tmopargs = args.tmop
-    shape_fn = SHAPE_REGISTRY[tmopargs.shape.shape_fn]
-
-    metric_fn = METRIC_REGISTRY[tmopargs.metric.metric_fn]
-    sig = inspect.signature(metric_fn)
-    metric_args = sig.parameters
-    if ("gamma" in metric_args) and (tmopargs.metric.gamma is not None):
-        metric_fn = partial(metric_fn, gamma=tmopargs.metric.gamma)
-    elif ("gamma" in metric_args) and (tmopargs.metric.gamma is None):
-        print(f"Metric {tmopargs.metric.metric_fn} requires parameter `gamma` but got {tmopargs.metric.gamma}. Defaulting to `gamma = 0.5`.")
-        metric_fn = partial(metric_fn, gamma=0.5)
-    elif ("gamma" not in metric_args) and (tmopargs.metric.gamma is not None):
-        print(f"Metric {tmopargs.metric.metric_fn} does not require parameter `gamma`. Ignoring supplied value.")
 
     client = Client()
 
@@ -111,31 +95,13 @@ def main(args):
                  interior_points=torch.from_numpy(nodes[int_ids]), 
                  boundary_ids=bd_ids,
                  interior_ids=int_ids,
-                 # elements=elements,
                  elements=torch.from_numpy(elements_padded),
-                 basis_functions = shape_fn,
-                 regular_reference = tmopargs.shape.regular_ref,
-                 n_sample_points = tmopargs.shape.n_samples,
-                 tmop_metric = metric_fn,
-                 untangle = tmopargs.metric.untangle,
-                 c = tmopargs.metric.c,
-                 d = tmopargs.metric.d,
+                 config=tmopargs,
                  log_client = log_client
         )
     print(f"{tmesh.n_pts} points: {tmesh.n_bd_pts} boundary, {tmesh.n_int_pts} interior.\n{tmesh.n_elements} elements")
 
-    # optionally set W manually. Change this to allow control with some argument to TMOPMesh
-    # tmesh.W = sqrt(1./tmesh.n_elements) * \
-    #         torch.tensor([[1.,0],
-    #                       [0,1.]])
-
     tmesh.to(dev)
-
-    # fig, ax = plt.subplots(1,1,figsize=(10,10))
-    # with torch.no_grad():
-    #     plot_mesh(tmesh.pts, tmesh.elements, ax = ax, fill_kwargs = {'edgecolor': 'k', 'facecolor': 'none', 'alpha':0.6, 'lw': 1})
-    #     fig.savefig("0000.png")
-    #     # plt.show()
 
     timestep = 1
     while True:
@@ -159,21 +125,11 @@ def main(args):
         with torch.no_grad():
             tmesh.bd_pts.copy_(torch.from_numpy(newp[bd_ids]).to(dev))
 
-        # with torch.no_grad():
-        #     plot_mesh(tmesh.pts, tmesh.elements, ax=ax, fill_kwargs = {'edgecolor': 'r', 'facecolor': 'none', 'alpha':0.6, 'lw': .5})
-        #     fig.savefig("during.png",dpi=300)
-        # optimise. TODO: lr, max epochs, patience, rtol as runtime arguments (or from config file)
-        optim = torch.optim.Adam(tmesh.parameters(), lr = tmopargs.optim.lr);
+        optim = tmopargs.optim.optimiser(tmesh.parameters(), lr = tmopargs.optim.lr);
         tmesh.optimise(optim,
                        tmopargs.optim.max_steps,
                        patience = tmopargs.optim.patience,
                        rtol=tmopargs.optim.rtol)
-
-        # with torch.no_grad():
-        #     ax.clear()
-        #     plot_mesh(points0, tmesh.elements, ax=ax, fill_kwargs = {'edgecolor': 'r', 'facecolor': 'none', 'alpha':0.3, 'lw': .5, 'ls': '-'})
-        #     plot_mesh(tmesh.pts, tmesh.elements, ax=ax, fill_kwargs = {'edgecolor': 'b', 'facecolor': 'none', 'alpha':0.8, 'lw': .5, 'ls': '-'})
-        #     fig.savefig(f"{timestep:04d}.png")
 
         # get the displacements as optimised_points - initial_points
         newdisp = tmesh.pts.cpu().detach().numpy() - points0

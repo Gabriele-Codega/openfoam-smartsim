@@ -107,7 +107,7 @@ def main(args):
         run_settings=tmop_rs
     )
     tmop_motion.attach_generator_files(
-        to_copy=["tmop_motion.py", "config.yaml"],
+        to_copy=["tmop_motion.py", "config.yaml", "soap.py"],
         to_symlink=["./tmop"]
     )
 
@@ -142,7 +142,9 @@ def main(args):
             time.sleep(0.1)
             if exp.get_status(openfoam_model)[0] in TERMINAL_STATUSES:
                 exp.stop(tmop_motion)
+                print()
                 break
+        print()
 
     except Exception as e:
         print("Caught an exception:", e)
