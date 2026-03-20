@@ -20,14 +20,14 @@ python tmop_run.py -h
 
 ### General parameters `cfg`
 | name | type | description |
-|------|------|-------------|
+|------|:----:|-------------|
 | mpi_ranks | int | Number of MPI ranks from OpenFOAM. Note: its value is overwritten by the SmartSim driver script. |
 | device | str | Accelerator for PyTorch. Defaluts to 'cuda' if available, otherwise falls back to 'cpu'. |
 
 ### TMOP parameters `cfg.tmop`
 
 | subclass | name | type | description |
-|----------|------|------|-------------|
+|----------|:----:|:----:|-------------|
 | shape | shape_fn | str | Name of the shape function on the reference elements. See [`shape_functions.py`](./shape_functions.py). |
 | shape | regular_ref | bool | Whether the reference element should be a regular n-gon. Only supports `True` at the moment. |
 | shape | n_samples | int | Number of sample points in the reference element. |
