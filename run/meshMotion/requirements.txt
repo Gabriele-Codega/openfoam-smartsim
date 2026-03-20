@@ -1,3 +1,5 @@
 gmsh
 PyFoam
 numpy == 1.26.4
+jsonargparse==4.46.0
+docstring_parser==0.17.0

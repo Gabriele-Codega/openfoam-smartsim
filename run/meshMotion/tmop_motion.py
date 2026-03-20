@@ -8,10 +8,11 @@ try:
 except:
     pass
 
-from jsonargparse import ArgumentParser
+from jsonargparse import ArgumentParser, set_docstring_parse_options
 import time
 import os
 
+set_docstring_parse_options(attribute_docstrings=True)
 torch.set_default_dtype(torch.float64)
 
 bulk_points_key = lambda i: f"points_MPI_{i}"

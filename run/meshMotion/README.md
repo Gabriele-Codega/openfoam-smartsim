@@ -13,4 +13,7 @@ Then install the requirements here:
 pip install -r requirements.txt
 ```
 
-Note: due to current limitations in SmartRedis, you must use numpy < 1.26.4
+Find more details about the TMOP motion solver [here](./tmop/README.md).
+
+> [!NOTE] 
+> Due to current limitations in SmartRedis, you must use numpy < 1.26.4
