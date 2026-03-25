@@ -1,9 +1,11 @@
 import torch
 import torch.nn as nn
 from torch.func import jacrev, vmap
+from torch.utils.data import DataLoader, TensorDataset
 import numpy as np
 
 import sys
+import shutil
 from math import sin, cos
 from functools import partial
 import inspect
@@ -50,6 +52,8 @@ class TMOPMesh(nn.Module):
         self.n_elements = elements.shape[0]
         self.n_sides = torch.sum(elements >= 0, dim=1, dtype=torch.int)
         self.n_sides_unique, self.n_sides_count = torch.unique(self.n_sides, return_counts=True)
+        # self.el_dataset = TensorDataset(torch.range(0,self.n_elements-1,dtype = torch.int))
+        self.el_dataset = TensorDataset(self.interior_ids)
 
 
         shape_config = config.shape
@@ -62,20 +66,14 @@ class TMOPMesh(nn.Module):
         self.n_sample_pts = shape_config.n_samples
         self._sample_ref_element()
 
-        # These two register buffers for shape values and gradients
-        # so that they can be automatically moved to GPU if needed.
-        self._evaluate_shape()
+        # Register buffer for shape gradients, so that 
+        # they can be automatically moved to GPU if needed.
         self._evaluate_shape_grad()
 
-        # This a non-elegant solution to make things efficient on GPU.
-        # Basically build a big tensor for shape gradients, where
-        # all the gradients for all sample points, all elements of all 
-        # shapes are stored, and pad that with zeros.
-        # Essentially retrieve the buffers set in the previous call and
-        # fill the big tensor.
-        # TODO: consider differentiating by element type, and merge this 
-        # and the call to _evaluate_shape_grad(). Also, not sure if 
-        # shape_vals are actually needed.
+        # Gather all shape gradients per physical element
+        # and per sample point. Pad rows with zero. Needed
+        # for jacobian computation without loops.
+        # TODO: consider differentiating by element type.
         shape_grad_all = torch.zeros((self.n_elements, self.n_sample_pts, self.elements.shape[1], self.spacedim))
         for i in range(self.n_elements):
             n_sides = self.n_sides[i].item()
@@ -102,11 +100,9 @@ class TMOPMesh(nn.Module):
         # parameters for untangling metric
         self.c = metric_config.c
         self.d = metric_config.d
+        self.compute_metric = self._compute_metric_untangle if self.untangle else self._compute_metric
 
         # Set the target W.
-        # NOTE: might want to implement a TargetFactory class
-        # for finer control over the target (preserve original,
-        # regular ngon, user defined...)
         target_config = config.target
         self._make_target(target_config)
         self.register_buffer("W_inv", torch.linalg.inv(self.W))
@@ -118,9 +114,6 @@ class TMOPMesh(nn.Module):
     @property
     def pts(self):
         return torch.cat([self.bd_pts, self.int_pts], dim=0)[self.inverse_perm]
-
-    def map_element(self, ref_coords, ref_element, physical_node_ids):
-        return self.shape(ref_coords, ref_element) @ self.pts[physical_node_ids]
 
     def _make_ref_elements(self):
         if self.regular_reference:
@@ -189,25 +182,8 @@ class TMOPMesh(nn.Module):
                 self.register_buffer(name, torch.vstack(samples).detach())
                 self.sample_points.append(name)
 
-    def _evaluate_shape(self):
-        if self.regular_reference:
-            self.shape_vals = {}
-            for n_sides, ref_el in self.ref_elements.items():
-                samples = getattr(self, self.sample_points[n_sides])
-                name = f"_shape_vals_{n_sides}"
-                self.register_buffer(name, vmap(self.shape, in_dims=(0,None))(samples, ref_el))
-                self.shape_vals[n_sides] = name
-        else:
-            self.shape_vals = []
-            for i in range(self.n_elements):
-                ref_el = self.ref_elements[i]
-                samples = getattr(self, self.sample_points[i])
-                name = f"_shape_vals_{i}"
-                self.register_buffer(name, vmap(self.shape, in_dims=(0,None))(samples, ref_el))
-                self.shape_vals.append(name)
-        
     def _evaluate_shape_grad(self):
-        _grad = jacrev(self.shape, argnums=0) # NOTE: this is not stable wit jacfwd
+        _grad = jacrev(self.shape, argnums=0)
         if self.regular_reference:
             self.shape_grad = {}
             for n_sides, ref_el in self.ref_elements.items():
@@ -279,89 +255,116 @@ class TMOPMesh(nn.Module):
         W = torch.sqrt(zeta)[...,None,None]*torch.matmul(R, torch.matmul(Q,delta))
         self.register_buffer("W", W.detach())
 
-    def _mapping_jacobian_regular(self, element):
-        n_sides = len(element)
-        return torch.einsum("psd,se->pde", getattr(self,self.shape_grad[n_sides]), self.pts[element]) # (n_samples, n_sides, spacedim), (n_sides, spacedim) -> (n_samples, spacedim, spacedim)
+    def _compute_metric_untangle(self, T):
+        tau = torch.linalg.det(T)
+        min_tau = tau.min().item()
+        self.t = 0.0 if min_tau > 0.0 else min_tau * ( 1 + self.c)
 
-    def _mapping_jacobian_svd(self, idx):
-        shape = self.shape_grad[idx]
-        x = self.pts[self.elements[idx]]
-        return torch.einsum("psd,se->pde", shape, x) # (n_samples, n_sides, spacedim), (n_sides, spacedim) -> (n_samples, spacedim, spacedim)
+        mu_hat = 0.5*self.mu(T)/(tau - self.t)
+        max_mu_hat = mu_hat.max().item()
+        # self.beta = min(self.beta, max_mu_hat + self.d)
+        self.beta =  max_mu_hat * (1 + self.d)
+        assert torch.all(tau > self.t), f"Invalid t: {self.t} > {tau.min().item()}"
+        assert torch.all(self.beta > mu_hat), f"Invalid beta: {self.beta} < {mu_hat.max().item()}"
 
-    def optimise(self, optimiser, max_epochs, patience=50, rtol=1e-2):
+        # Absolute priority to untangling.
+        # If untangled, then t = 0, and we can start
+        # checking if we made improvements on the worst
+        # element.
+        if self.t >= 0:
+            if self.beta < self.min_beta and abs((self.beta-self.min_beta)/self.beta) > self.rtol:
+                self.min_beta = self.beta
+                self.epochs_since_improvement = 0
+            else:
+                self.epochs_since_improvement += 1
 
-        t = 0 # tracks minimum tau
-        beta = 0 # tracks maximum mu_hat
-        min_beta = torch.inf
-        epochs_since_improvement = 0
+        # wcuo as in Worst Case Untangle Optimise (or something like that)
+        wcuo = mu_hat/(self.beta - mu_hat)
+        return wcuo.mean()
+
+    def _compute_metric(self, T):
+        return self.mu(T).mean()
+
+    def optimise(self, optimiser, scheduler, config):
+        max_epochs = config.max_steps
+        patience = config.patience
+        self.rtol = config.rtol
+        batch_size = self.n_int_pts if config.batch_size == -1 else config.batch_size
+        assert batch_size > 0, f"Invalid batch size {batch_size}. Values need to be either -1 (no batches) or positive."
+        el_dataloader = DataLoader(self.el_dataset, batch_size=batch_size, shuffle=True)
+        n_batches = len(el_dataloader)
+
+        self.t = 0 # tracks minimum tau
+        self.beta = torch.inf # tracks maximum mu_hat
+        self.min_beta = torch.inf
+        self.epochs_since_improvement = 0
         for epoch in range(max_epochs):
-            if epochs_since_improvement > patience:
+            if self.epochs_since_improvement > patience:
                 break
-            loss = 0
-            # A = shape_grad @ pts[elements], with the correct grad selected depending on the type of element
-            if self.regular_reference :
-                pts_all = self.pts[self.elements]
-                # GPU-friendly version
-                A = torch.einsum("epsi,esj->epij", self.shape_grad_all, pts_all) # (n_elements, n_samples, n_sides, spacedim), (n_elements, n_sides, spacedim) -> (n_elements, n_samples, spacedim, spacedim)
-            else:
-                #WARNING: NOT WORKING
-                As =  list(map(partial(torch.einsum,"psd,se->pde"), self.shape_grad , self.pts[self.elements])) 
-                A = torch.vstack(As)
+            for batch, indices in enumerate(el_dataloader):
+                loss = 0
+                indices = indices[0]
+                el_mask = torch.isin(self.elements, indices)
+                el = self.elements[el_mask.any(dim=1)]
+                grads = self.shape_grad_all[el_mask.any(dim=1)]
 
-            T = (A @ self.W_inv).reshape(-1,2,2)
+                # A = shape_grad @ pts[elements], with the correct grad selected depending on the type of element
+                if self.regular_reference :
+                    pts_all = self.pts[el]
+                    # GPU-friendly version
+                    A = torch.einsum("epsi,esj->epij", grads, pts_all) # (n_elements, n_samples, n_sides, spacedim), (n_elements, n_sides, spacedim) -> (n_elements, n_samples, spacedim, spacedim)
+                else:
+                    #WARNING: NOT WORKING
+                    As =  list(map(partial(torch.einsum,"psd,se->pde"), self.shape_grad , self.pts[self.elements])) 
+                    A = torch.vstack(As)
 
-            if self.untangle:
-                tau = torch.linalg.det(T)
-                min_tau = tau.min().item()
-                t = 0.0 if min_tau > 0.0 else min_tau * (1 + self.c)
+                T = (A @ self.W_inv[el_mask.any(dim=1)]).reshape(-1,2,2)
 
-                mu_hat = 0.5*self.mu(T)/(tau - t)
-                max_mu_hat = mu_hat.max().item()
-                #beta = max(beta, max_mu_hat * (1 + d))
-                beta =  max_mu_hat * (1 + self.d)
-                assert torch.all(tau > t), f"Invalid t: {t} > {tau.min().item()}"
-                assert torch.all(beta > mu_hat), f"Invalid beta: {beta} < {mu_hat.max().item()}"
+                loss = self.compute_metric(T)
 
-                # Absolute priority to untangling.
-                # If untangled, then t = 0, and we can start
-                # checking if we made improvements on the worst
-                # element.
-                if t >= 0:
-                    if beta < min_beta and abs((beta-min_beta)/beta) > rtol:
-                        min_beta = beta
-                        epochs_since_improvement = 0
-                    else:
-                        epochs_since_improvement += 1
+                if not loss < torch.inf:
+                    print("Loss blew up. Stopping.")
+                    break
 
-                # wcuo as in Worst Case Untangle Optimise (or something like that)
-                wcuo = mu_hat/(beta - mu_hat)
-                loss = wcuo.mean()
-            else:
-                loss = self.mu(T).mean()
+                optimiser.zero_grad()
+                loss.backward()
+                mask = torch.isin(self.interior_ids,indices)
+                self.int_pts.grad[~mask].zero_()
+                optimiser.step()
+                if self.t >= 0:
+                    try:
+                        scheduler.step()
+                    except:
+                        scheduler.step(metrics=self.beta)
 
-            if not loss < torch.inf:
-                print("Loss blew up. Stopping.")
-                break
-
-            optimiser.zero_grad()
-            loss.backward()
-            optimiser.step()
-
-
-            # log stuff
-            plen = int((epoch/max_epochs)*40 + 0.5)
-            barstr = "[" + u"\u2501" * plen + " " * (40-plen) + "]"
-            if self.log_client:
-                self.log_client.put_tensor("tmop_epoch", np.array([epoch]))
-                self.log_client.put_tensor("tmop_loss", np.array([loss.detach().item()]))
-                self.log_client.put_tensor("tmop_t", np.array([t]))
-                self.log_client.put_tensor("tmop_beta", np.array([beta]))
-                self.log_client.put_tensor("tmop_progress", np.array([plen]))
-            if sys.stdout.isatty():
-                logstr =  f"\x1b[38;2;61;69;106m{barstr} epoch {epoch} \x1b[0m" + f"\x1b[38;2;172;82;37m-- loss = {loss.item():0.3e}; t = {t:0.3e}; beta = {beta:0.3e}\x1b[0m"
-                # logstr = logstr.ljust(200)
-                print('\x1b[k'+logstr+'\r',end='')
-            else:
-                logstr = f"epoch = {epoch}, loss = {loss.item():0.3e}, t = {t:0.3e}, beta = {beta:0.3e}"
-                print(logstr)
+                # log stuff
+                self._log(epoch, max_epochs, batch, n_batches, loss, self.t, self.beta, scheduler.get_last_lr()[0])
         print()
+
+    def _log(self, epoch, max_epochs, batch, n_batches, loss, t, beta, lr):
+        ecol = "\033[38;2;61;69;106m"
+        bcol = "\033[48;2;0;147;155m"
+        dfg = "\033[97m"
+        dbg = "\033[107m"
+        rcol = "\033[0m"
+
+        blen = int(shutil.get_terminal_size().columns/5)
+        eplen = int((epoch+1)/max_epochs*blen + 0.5)
+        bplen = int((batch+1)/n_batches*blen + 0.5)
+
+        if eplen >= bplen:
+            fill = (ecol + bcol + "\u2580") * bplen + rcol + (dbg+ecol+"\u2580") * (eplen-bplen) + rcol + (dfg+dbg+"\033[7m\u2588") * (blen - eplen) + rcol
+        elif eplen < bplen:
+            fill = (ecol + bcol + "\u2580") * eplen + rcol + (dfg+bcol+"\u2580") * (bplen-eplen) + rcol + (dfg+dbg+"\033[7m\u2588") * (blen - bplen) + rcol
+
+        barstr = "\u2595" + fill + "\u258F"
+        logstr =  barstr + f"\033[38;2;61;69;106m epoch {epoch+1}\033[0m,\033[38;2;0;147;155m batch {batch+1} \033[0m" + f"-- loss = {loss.item():0.3e};\x1b[38;2;172;82;37m t = {t:0.3e}; beta = {beta:0.3e}; lr = {lr:0.3e}\x1b[0m"
+        if self.log_client:
+            self.log_client.put_tensor("tmop_string", np.frombuffer(logstr.encode('utf-8'),dtype=np.uint8))
+            self.log_client.put_tensor("tmop_epoch", np.array([epoch]))
+        if sys.stdout.isatty():
+            logstr =  barstr + f"\033[38;2;61;69;106m epoch {epoch+1}\033[0m,\033[38;2;0;147;155m batch {batch+1} \033[0m" + f"-- loss = {loss.item():0.3e};\x1b[38;2;172;82;37m t = {t:0.3e}; beta = {beta:0.3e}; lr = {lr:0.3e}\x1b[0m"
+            print('\x1b[k'+logstr+'\r',end='')
+        else:
+            logstr = f"epoch = {epoch}, batch = {batch}, loss = {loss.item():0.3e}, t = {t:0.3e}, beta = {beta:0.3e}, lr = {lr:0.3e}"
+            print(logstr)

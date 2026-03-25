@@ -127,14 +127,10 @@ def main(args):
         last = -1
         timestep = 1
         while True:
-            if log_client.key_exists("tmop_progress"):
+            if log_client.key_exists("tmop_epoch") and log_client.key_exists("tmop_string"):
+                logstr = bytes(log_client.get_tensor("tmop_string")).decode('utf-8')
                 epoch = log_client.get_tensor("tmop_epoch")[0]
-                loss = log_client.get_tensor("tmop_loss")[0]
-                t = log_client.get_tensor("tmop_t")[0]
-                beta = log_client.get_tensor("tmop_beta")[0]
-                plen = log_client.get_tensor("tmop_progress")[0]
-                barstr = "[" + u"\u2501" * plen + " " * (40-plen) + "]"
-                logstr =  f"Timestep {timestep} - \x1b[38;2;61;69;106m{barstr} epoch {epoch} \x1b[0m" + f"\x1b[38;2;172;82;37m-- loss = {loss.item():0.3e}; t = {t:0.3e}; beta = {beta:0.3e}\x1b[0m"
+                logstr = f'Timestep {timestep} - '+logstr
                 if epoch < last:
                     timestep += 1
                 print('\r\x1b[2K'+logstr,end='',flush=True)
