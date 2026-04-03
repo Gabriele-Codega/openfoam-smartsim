@@ -8,7 +8,7 @@ class ShapeConfig:
     Configure the shape functions on the reference element.
     """
     shape_fn: str = "stable_mean_value_coordinates"
-    """Name of the shape function. Should be defined in `shape_functions.py`"""
+    """Name of the shape function. Should be defined in `shape_functions.py`."""
     reference_type: str = "regular"
     """What reference element should be used. Must be one of ['regular', 'initial', 'svd']"""
     n_samples: int = 10
@@ -31,14 +31,16 @@ class MetricConfig:
 @dataclass
 class TargetConfig:
     """Configure target construction."""
-    preserve_size:          bool = True
-    """Whether to preserve the size of the original mesh elements."""
-    preserve_orientation:   bool = True
-    """Whether to preserve the orientation of the original mesh elements."""
-    preserve_skewness:      bool = True
-    """Whether to preserve the internal angles of the original mesh elements. If `False` tries to make the elements as regular as possible."""
-    preserve_aspect:        bool = True
-    """Whether to preserve the aspect ration of the original mesh elements. If `False` triest to make the elements as regular as possible."""
+    target_factory: str = "TargetInitial"
+    """Which `TargetFactory` should be used to build target matrices. Defined in `tmopfactory.py`."""
+    # preserve_size:          bool = True
+    # """Whether to preserve the size of the original mesh elements."""
+    # preserve_orientation:   bool = True
+    # """Whether to preserve the orientation of the original mesh elements."""
+    # preserve_skewness:      bool = True
+    # """Whether to preserve the internal angles of the original mesh elements. If `False` tries to make the elements as regular as possible."""
+    # preserve_aspect:        bool = True
+    # """Whether to preserve the aspect ration of the original mesh elements. If `False` triest to make the elements as regular as possible."""
 
 @dataclass
 class OptimConfig:

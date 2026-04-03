@@ -11,8 +11,7 @@ from functools import partial
 import inspect
 
 from .configutils import TMOPConfig
-from .shape_functions import SHAPE_REGISTRY
-from .tmopmetrics import METRIC_REGISTRY
+from .registries import (SHAPE_REGISTRY, METRIC_REGISTRY, TARGET_FACTORY_REGISTRY)
 
 torch.set_default_dtype(torch.float64)
 
@@ -108,7 +107,14 @@ class TMOPMesh(nn.Module):
 
         # Set the target W.
         target_config = config.target
-        self._make_target(target_config)
+        try:
+            self.target_factory = TARGET_FACTORY_REGISTRY[target_config.target_factory]()
+        except KeyError as e:
+            e.add_note(f"Valid values for `target_factory` are {list(TARGET_FACTORY_REGISTRY.keys())}. Got '{target_config.target_factory}' instead.")
+            raise e
+        W = self.target_factory.make_target(self)
+        self.register_buffer("W", W.detach())
+        # self._make_target(target_config)
         self.register_buffer("W_inv", torch.linalg.inv(self.W))
 
         # Allows smartsim driver to log progress of optimisation to stdout
@@ -291,7 +297,10 @@ class TMOPMesh(nn.Module):
                 pts_all = self.pts[el]
                 A = torch.einsum("epsi,esj->epij", grads, pts_all) # (n_elements, n_samples, n_sides, spacedim), (n_elements, n_sides, spacedim) -> (n_elements, n_samples, spacedim, spacedim)
 
-                T = (A @ self.W_inv[el_mask.any(dim=1)]).reshape(-1,2,2)
+                try:
+                    T = (A @ self.W_inv[el_mask.any(dim=1)]).reshape(-1,2,2)
+                except IndexError:
+                    T = (A @ self.W_inv).reshape(-1,2,2)
 
                 loss = self.compute_metric(T)
 

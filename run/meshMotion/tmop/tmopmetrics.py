@@ -1,9 +1,5 @@
 import torch
-
-METRIC_REGISTRY = {}
-def register_metric(fn):
-    METRIC_REGISTRY[fn.__name__] = fn
-    return fn
+from .registries import register_metric
 
 @register_metric
 def tmop_metric(T):

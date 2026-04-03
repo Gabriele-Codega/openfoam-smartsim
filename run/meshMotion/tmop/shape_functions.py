@@ -1,10 +1,5 @@
 import torch
-
-SHAPE_REGISTRY = {}
-
-def register_shape(fn):
-    SHAPE_REGISTRY[fn.__name__] = fn
-    return fn
+from .registries import register_shape
 
 @register_shape
 def barycentric_coordinates(p, vertices=None):

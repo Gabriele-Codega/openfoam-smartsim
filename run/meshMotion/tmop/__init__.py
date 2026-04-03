@@ -1,21 +1,20 @@
-from .tmopmesh import TMOPMesh
-from .configutils import Config
-
-from .tmopmetrics import METRIC_REGISTRY, register_metric
-from .shape_functions import SHAPE_REGISTRY, register_shape
+from .registries import (
+    METRIC_REGISTRY,
+    SHAPE_REGISTRY,
+    TARGET_FACTORY_REGISTRY,
+)
 
 from . import tmopmetrics
 from . import shape_functions
+from . import targetfactory
 
-from .voromeshutils import *
-
+from .tmopmesh import TMOPMesh
+from .configutils import Config
 __all__ = [
     "TMOPMesh",
     "Config",
 
     "METRIC_REGISTRY",
-    "register_metric",
-
     "SHAPE_REGISTRY",
-    "register_shape",
+    "TARGET_FACTORY_REGISTRY",
 ]
