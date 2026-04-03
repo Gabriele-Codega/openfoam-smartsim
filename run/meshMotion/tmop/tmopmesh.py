@@ -58,9 +58,10 @@ class TMOPMesh(nn.Module):
 
         shape_config = config.shape
         self.shape = SHAPE_REGISTRY[shape_config.shape_fn]
-        self.regular_reference = shape_config.regular_ref
-        if not self.regular_reference:
-            raise ValueError("No support for non-regular reference elements yet. Set `regular_ref` to `True`.")
+        self.ref_type = shape_config.reference_type
+        valid_refs = ["regular", "initial", "svd"]
+        if self.ref_type not in valid_refs:
+            raise ValueError(f"Invalid reference type {self.ref_type}. Choose one of {valid_refs}.")
         self._make_ref_elements()
 
         self.n_sample_pts = shape_config.n_samples
@@ -74,11 +75,14 @@ class TMOPMesh(nn.Module):
         # and per sample point. Pad rows with zero. Needed
         # for jacobian computation without loops.
         # TODO: consider differentiating by element type.
+
+        #NOTE: probably do not need to gather all if we differentiate by 
+        # element type. 
         shape_grad_all = torch.zeros((self.n_elements, self.n_sample_pts, self.elements.shape[1], self.spacedim))
-        for i in range(self.n_elements):
-            n_sides = self.n_sides[i].item()
-            g = getattr(self, self.shape_grad[n_sides])
-            shape_grad_all[i,:,:n_sides] = g
+        for ns in self.n_sides_unique:
+            mask = self.n_sides == ns
+            g = getattr(self, self.shape_grad[ns.item()])
+            shape_grad_all[mask,:,:ns] = g
         self.register_buffer("shape_grad_all", shape_grad_all.detach())
 
         metric_config = config.metric
@@ -116,20 +120,24 @@ class TMOPMesh(nn.Module):
         return torch.cat([self.bd_pts, self.int_pts], dim=0)[self.inverse_perm]
 
     def _make_ref_elements(self):
-        if self.regular_reference:
-            # ref is a regula r n-gon. Build a dict where key is number of sides
-            # and val is the tensor of vertices.
-            r = 1.
-            self.ref_elements = {}
-            for ns in self.n_sides.unique():
-                self.ref_elements[ns.item()] = torch.tensor([(r*cos(2*torch.pi*i/ns),r*sin(2*torch.pi*i/ns)) for i in range(1,ns+1)])
-        else:
-            self.ref_elements = []
-            for el in self.elements:
-                phys = self.pts[el]
-                U,S,V = torch.linalg.svd(phys - phys.mean(dim=0).unsqueeze(0), full_matrices = False)
-                ref = (U[...,:2]@V)
-                self.ref_elements.append(ref)
+        self.ref_elements = {}
+        match self.ref_type :
+            case "regular":
+                r = 1.
+                for ns in self.n_sides_unique:
+                    self.ref_elements[ns.item()] = torch.tensor([(r*cos(2*torch.pi*i/ns),r*sin(2*torch.pi*i/ns)) for i in range(1,ns+1)])
+            case "initial":
+                for ns in self.n_sides_unique:
+                    mask = (self.n_sides == ns)
+                    phys = self.pts[self.elements[mask]][:,:ns]
+                    self.ref_elements[ns.item()] = phys
+            case "svd":
+                for ns in self.n_sides_unique:
+                    mask = (self.n_sides == ns)
+                    phys = self.pts[self.elements[mask]][:,:ns]
+                    U,S,V = torch.linalg.svd(phys - phys.mean(dim=1).unsqueeze(1), full_matrices = False)
+                    ref = (U@V)
+                    self.ref_elements[ns.item()] = ref
 
     def _sample_ref_element(self):
         # Sample uniformly from a unit trianlge
@@ -138,67 +146,38 @@ class TMOPMesh(nn.Module):
         y = (1-x)*u2
         tri_samples = torch.stack([x, y], dim = -1)
         # Barycentric coordinates of samples
-        tri_basis = torch.stack([1-tri_samples[...,0]-tri_samples[...,1], tri_samples[...,0], tri_samples[...,1]],dim=-1)
+        tri_basis = torch.stack([1-tri_samples[...,0]-tri_samples[...,1], tri_samples[...,0], tri_samples[...,1]],dim=-1) #(n_sample_pts, 3)
 
-        if self.regular_reference:
-            # For each reference element, build a triangle between
-            # pairs of consecutive vertices and barycenter. Map 
-            # random samples to these triangles to cover the whole
-            # element.
-            self.sample_points = {}
-            for n_sides, ref_el in self.ref_elements.items():
-                # we want n_sample_points points in total. So we evenly distribute those in the n_sides triangles
-                # in a round-robin fashion (i.e. optional small imbalance)
-                n_pts_base = self.n_sample_pts//n_sides 
-                rem = self.n_sample_pts % n_sides
+        self.sample_points = {}
+        for n_sides, ref_el in self.ref_elements.items():
+            # we want n_sample_points points in total. So we evenly distribute those in the n_sides triangles
+            # in a round-robin fashion (i.e. optional small imbalance)
+            n_pts_base = self.n_sample_pts//n_sides 
+            rem = self.n_sample_pts % n_sides
+            n_pts_per_tri = torch.tensor([n_pts_base + (i < rem) for i in range(n_sides)],dtype=torch.int) #(n_sides,)
 
-                samples = []
-                triangles = torch.tensor([[n_sides, i, (i+1)%n_sides] for i in range(n_sides)])
-                for i, tri in enumerate(triangles):
-                    n_pts_per_tri = n_pts_base + (i < rem)
-                    pts = torch.vstack((ref_el,torch.tensor([0.,0.])))[tri]
-                    samples.append(tri_basis[:n_pts_per_tri]@pts)
+            triangles = torch.stack((torch.full((n_sides,), n_sides, dtype=torch.int),
+                                     torch.arange(n_sides, dtype=torch.int),
+                                     torch.roll(torch.arange(n_sides, dtype=torch.int),1)
+                                     ),dim=-1) # (n_sides, 3)
 
-                name = f"samples_{n_sides}"
-                self.register_buffer(name, torch.vstack(samples).detach())
-                self.sample_points[n_sides] = name
-        else:
-            self.sample_points = []
-            for i in range(self.n_elements):
-                n_sides = self.n_sides[i]
-                ref_el = self.ref_elements[i]
-                # we want n_sample_points points in total. So we evenly distribute those in the n_sides triangles
-                # in a round-robin fashion (i.e. optional small imbalance)
-                n_pts_base = self.n_sample_pts//n_sides 
-                rem = self.n_sample_pts % n_sides
-                samples = []
-                triangles = torch.tensor([[n_sides, i, (i+1)%n_sides] for i in range(n_sides)])
-                for i, tri in enumerate(triangles):
-                    n_pts_per_tri = n_pts_base + (i < rem)
-                    pts = torch.vstack((ref_el,torch.tensor([0.,0.])))[tri] ## WARNING: assumes that the origin is inside the polygon, which is not always true. In general should be the centroid of the kernel.
-                    samples.append(tri_basis[:n_pts_per_tri]@pts)
-
-                name = f"samples_{i}"
-                self.register_buffer(name, torch.vstack(samples).detach())
-                self.sample_points.append(name)
+            centre = torch.mean(ref_el, dim=-2, keepdim=True) # (..., 1, spacedim)
+            pts = torch.cat((ref_el,centre),dim=-2) # (..., n_sides+1, spacedim)
+            samples = torch.einsum("si,...tid -> ...tsd",tri_basis,pts[...,triangles,:]) # (..., n_sides, n_samples, spacedim)
+            samples = torch.cat([samples[...,i,:n_pts_per_tri[i],:] for i in range(n_sides)], dim=-2) # (..., n_samples, spacedim)
+            name = f"samples_{n_sides}"
+            self.register_buffer(name, samples.detach())
+            self.sample_points[n_sides] = name
 
     def _evaluate_shape_grad(self):
         _grad = jacrev(self.shape, argnums=0)
-        if self.regular_reference:
-            self.shape_grad = {}
-            for n_sides, ref_el in self.ref_elements.items():
-                samples = getattr(self, self.sample_points[n_sides])
-                name = f"_shape_grad_{n_sides}"
-                self.register_buffer(name, vmap(_grad, in_dims=(0,None))(samples, ref_el))
-                self.shape_grad[n_sides] = name
-        else:
-            self.shape_grad = []
-            for i in range(self.n_elements):
-                ref_el = self.ref_elements[i]
-                samples = getattr(self, self.sample_points[i])
-                name = f"_shape_grad_{i}"
-                self.register_buffer(name, vmap(_grad, in_dims=(0,None))(samples, ref_el))
-                self.shape_grad.append(name)
+        _vgrad = vmap(vmap(_grad, in_dims=(0,None)),in_dims=(0,0)) if self.ref_type != "regular" else vmap(_grad, in_dims=(0,None))# inner vmap maps over samples, outer vmap maps over el
+        self.shape_grad = {}
+        for n_sides, ref_el in self.ref_elements.items():
+            samples = getattr(self, self.sample_points[n_sides])
+            name = f"_shape_grad_{n_sides}"
+            self.register_buffer(name, _vgrad(samples, ref_el)) 
+            self.shape_grad[n_sides] = name
 
     def _make_target(self, config):
         pts_all = self.pts[self.elements]
@@ -309,14 +288,8 @@ class TMOPMesh(nn.Module):
                 grads = self.shape_grad_all[el_mask.any(dim=1)]
 
                 # A = shape_grad @ pts[elements], with the correct grad selected depending on the type of element
-                if self.regular_reference :
-                    pts_all = self.pts[el]
-                    # GPU-friendly version
-                    A = torch.einsum("epsi,esj->epij", grads, pts_all) # (n_elements, n_samples, n_sides, spacedim), (n_elements, n_sides, spacedim) -> (n_elements, n_samples, spacedim, spacedim)
-                else:
-                    #WARNING: NOT WORKING
-                    As =  list(map(partial(torch.einsum,"psd,se->pde"), self.shape_grad , self.pts[self.elements])) 
-                    A = torch.vstack(As)
+                pts_all = self.pts[el]
+                A = torch.einsum("epsi,esj->epij", grads, pts_all) # (n_elements, n_samples, n_sides, spacedim), (n_elements, n_sides, spacedim) -> (n_elements, n_samples, spacedim, spacedim)
 
                 T = (A @ self.W_inv[el_mask.any(dim=1)]).reshape(-1,2,2)
 
