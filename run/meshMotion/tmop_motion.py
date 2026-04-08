@@ -125,6 +125,9 @@ def main(args):
         newp[disp_gids] += displacements
         with torch.no_grad():
             tmesh.bd_pts.copy_(torch.from_numpy(newp[bd_ids]).to(dev))
+        if cfg.mode == "points0":
+            with torch.no_grad():
+                tmesh.int_pts.copy_(torch.from_numpy(newp[int_ids]).to(dev))
 
         optim = tmopargs.optim.optimiser(tmesh.parameters(), **tmopargs.optim.optimiser_kwargs);
         sched = tmopargs.optim.scheduler(optim, **tmopargs.optim.scheduler_kwargs);

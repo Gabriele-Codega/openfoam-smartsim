@@ -114,7 +114,6 @@ class TMOPMesh(nn.Module):
             raise e
         W = self.target_factory.make_target(self)
         self.register_buffer("W", W.detach())
-        # self._make_target(target_config)
         self.register_buffer("W_inv", torch.linalg.inv(self.W))
 
         # Allows smartsim driver to log progress of optimisation to stdout
@@ -299,7 +298,7 @@ class TMOPMesh(nn.Module):
 
                 try:
                     T = (A @ self.W_inv[el_mask.any(dim=1)]).reshape(-1,2,2)
-                except IndexError:
+                except IndexError: # workaround to allow target to be the same for all elements (i.e. just one matrix)
                     T = (A @ self.W_inv).reshape(-1,2,2)
 
                 loss = self.compute_metric(T)

@@ -77,10 +77,12 @@ class TMOPConfig:
 @dataclass
 class Config:
     """Main configuration."""
-    mpi_ranks: int = field(default=1, metadata={"help": "Number of MPI ranks from OpenFOAM"})
+    mpi_ranks: int = 1
     """Number of MPI ranks in OpenFOAM."""
     device: Optional[str] = None
     """Which accelerator should be used in PyTorch. Defaults to GPU ('cuda') if available, otherwise falls back to CPU ('cpu')."""
+    mode: str = "incremental"
+    """Either 'incremental' or 'points0'. If 'incremental', the motion is computed with respect to the mesh at the previous time step. If 'points0', the motion is computed with respect to the initial mesh."""
 
     tmop: TMOPConfig = field(default_factory=TMOPConfig)
     """Dataclass to handle TMOP configuration."""
