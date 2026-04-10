@@ -232,3 +232,6 @@ run/meshMotion/*Input
 # Build Directories
 src/**/Make
 applications/**/Make
+
+# python install
+*egg-info

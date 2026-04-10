@@ -7,7 +7,7 @@ import torch
 class OptimConfig:
     """Configure the optimiser."""
     optimiser: Type[torch.optim.Optimizer] = torch.optim.Adam
-    """Which optimiser should be used, specified as (subclass of) `torch.optim.Optimizer`. Using custom optimisers is allowed but requires importing the corresponding module in `tmop_motion.py`."""
+    """Which optimiser should be used, specified as (subclass of) `torch.optim.Optimizer`."""
     optimiser_kwargs: Dict = field(default_factory=dict)
     """Optimiser keyword arguments."""
     scheduler: Type[torch.optim.lr_scheduler.LRScheduler] = torch.optim.lr_scheduler.ReduceLROnPlateau

@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools >= 77.0.3"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tmop"
+version = "0.1.0"
+dependencies = [
+  "numpy <= 1.26.4",
+  "torch",
+  "jsonargparse",
+  "smartredis"
+]
+
+[project.scripts]
+tmopSmartsimMotion = "tmop.tmopSmartsimMotion:main"

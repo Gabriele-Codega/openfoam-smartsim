@@ -149,7 +149,7 @@ class TMOPOptimiser(nn.Module):
         return self.n_bad_epochs > self.patience
 
     def _log(self):
-        ecol = "\033[38;2;61;69;106m"
+        ecol = "\033[38;2;251;179;23m"
         bcol = "\033[48;2;172;82;37m"
         dfg = "\033[97m"
         dbg = "\033[107m"
@@ -176,12 +176,12 @@ class TMOPOptimiser(nn.Module):
             if k not in ["epoch", "max_epochs", "batch", "n_batches", "loss"]:
                 other += f"; {k} = {v:0.3e}"
 
-        logstr =  barstr + f"\033[38;2;61;69;106m epoch {epoch+1}\033[0m,\033[38;2;172;82;37m batch {batch+1} \033[0m" + f"-- loss = {float(loss):0.3e}"+ other 
+        logstr =  barstr + f"\033[38;2;251;179;23m epoch {epoch+1}\033[0m,\033[38;2;172;82;37m batch {batch+1} \033[0m" + f"-- loss = {float(loss):0.3e}"+ other 
         if self.log_client:
             self.log_client.put_tensor("tmop_string", np.frombuffer(logstr.encode('utf-8'),dtype=np.uint8))
             self.log_client.put_tensor("tmop_epoch", np.array([epoch]))
         if sys.stdout.isatty():
-            logstr =  barstr + f"\033[38;2;61;69;106m epoch {epoch+1}\033[0m,\033[38;2;172;82;37m batch {batch+1} \033[0m" + f"-- loss = {float(loss):0.3e}"+ other 
+            logstr =  barstr + f"\033[38;2;251;179;23m epoch {epoch+1}\033[0m,\033[38;2;172;82;37m batch {batch+1} \033[0m" + f"-- loss = {float(loss):0.3e}"+ other 
             print('\x1b[k'+logstr+'\r',end='')
         else:
             logstr = f"epoch = {epoch}; batch = {batch}; loss = {float(loss):0.3e}" + other

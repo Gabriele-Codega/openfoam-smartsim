@@ -94,8 +94,8 @@ def main(args):
     # ----------------------------------------------------------------
 
     tmop_rs = exp.create_run_settings(
-        exe="python",
-        exe_args=f"tmop_motion.py --config config.yaml --motion.mpi_ranks {num_mpi_ranks}",
+        exe="tmopSmartsimMotion",
+        exe_args=f"--config config.yaml --motion.mpi_ranks {num_mpi_ranks}",
         env_vars={"LOG_DB": log_db.get_address()[0]}
     )
     tmop_rs.set_tasks(1)
@@ -107,7 +107,7 @@ def main(args):
         run_settings=tmop_rs
     )
     tmop_motion.attach_generator_files(
-        to_copy=["tmop_motion.py", "config.yaml", "soap.py"],
+        to_copy=["tmopSmartsimMotion", "config.yaml"],
         to_symlink=["./tmop"]
     )
 
