@@ -107,8 +107,7 @@ def main(args):
         run_settings=tmop_rs
     )
     tmop_motion.attach_generator_files(
-        to_copy=["tmopSmartsimMotion", "config.yaml"],
-        to_symlink=["./tmop"]
+        to_copy=["config.yaml"],
     )
 
     exp.generate(tmop_motion, overwrite=True)
