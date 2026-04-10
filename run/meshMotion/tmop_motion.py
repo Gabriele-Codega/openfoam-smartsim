@@ -1,4 +1,4 @@
-from tmop import Config, TMOPMesh
+import tmop
 
 import torch
 import numpy as np
@@ -91,18 +91,22 @@ def main(args):
     int_ids = all_ids[~bd_mask]
 
     # initialise the mesh object
-    tmesh = TMOPMesh(
+    mesh = tmop.Mesh(
                  boundary_points=torch.from_numpy(nodes[bd_ids]), 
                  interior_points=torch.from_numpy(nodes[int_ids]), 
                  boundary_ids=bd_ids,
                  interior_ids=int_ids,
                  elements=torch.from_numpy(elements_padded),
-                 config=tmopargs,
-                 log_client = log_client
         )
-    print(f"{tmesh.n_pts} points: {tmesh.n_bd_pts} boundary, {tmesh.n_int_pts} interior.\n{tmesh.n_elements} elements")
+    print(f"{mesh.n_pts} points: {mesh.n_bd_pts} boundary, {mesh.n_int_pts} interior.\n{mesh.n_elements} elements")
 
-    tmesh.to(dev)
+    toptim = cfg.tmop_optimiser(
+        mesh, 
+        config=tmopargs, 
+        log_client = log_client
+    )
+
+    toptim.to(dev)
 
     timestep = 1
     while True:
@@ -124,20 +128,15 @@ def main(args):
         newp = points0.copy()
         newp[disp_gids] += displacements
         with torch.no_grad():
-            tmesh.bd_pts.copy_(torch.from_numpy(newp[bd_ids]).to(dev))
+            toptim.mesh.bd_pts.copy_(torch.from_numpy(newp[bd_ids]).to(dev))
         if cfg.mode == "points0":
             with torch.no_grad():
-                tmesh.int_pts.copy_(torch.from_numpy(newp[int_ids]).to(dev))
+                toptim.mesh.int_pts.copy_(torch.from_numpy(newp[int_ids]).to(dev))
 
-        optim = tmopargs.optim.optimiser(tmesh.parameters(), **tmopargs.optim.optimiser_kwargs);
-        sched = tmopargs.optim.scheduler(optim, **tmopargs.optim.scheduler_kwargs);
-        tmesh.optimise(optim,
-                       sched,
-                       tmopargs.optim
-                       )
+        toptim.optimise()
 
         # get the displacements as optimised_points - initial_points
-        newdisp = tmesh.pts.cpu().detach().numpy() - points0
+        newdisp = toptim.mesh.pts.cpu().detach().numpy() - points0
 
         # send displacements back together with the corresponding node label for OpenFOAM
         for r in mpi_ranks:
@@ -155,10 +154,10 @@ def main(args):
 if __name__ == "__main__":
     parser = ArgumentParser(description="TMOP optimisation for mesh motion")
     parser.add_argument("--config", action="config")
-    parser.add_class_arguments(Config, "cfg")
+    parser.add_class_arguments(tmop.MotionConfig, "motion")
 
     args = parser.parse_args()
-    cfg: Config = args.cfg
+    cfg: tmop.MotionConfig = args.motion
 
     main(cfg)
     exit()
