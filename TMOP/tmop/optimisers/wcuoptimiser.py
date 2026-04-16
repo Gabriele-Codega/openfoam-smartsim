@@ -62,7 +62,8 @@ class WCUOptimiser(TMOPOptimiser):
                 self._log_dict["loss"] = loss
                 self._log_dict["t"] = self.t
                 self._log_dict["beta"] = self.beta
-                self._log_dict["lr"] = self.scheduler.get_last_lr()[0]
+                _sched = self.t_scheduler if self.batch_worst_t<0 else self.scheduler
+                self._log_dict["lr"] = _sched.get_last_lr()[0]
                 self._log()
 
             self.batch_mean_loss /= self.n_batches

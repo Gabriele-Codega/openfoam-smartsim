@@ -289,6 +289,12 @@ void Foam::tmopMotionSolver::writeMeshElements()
     {
         max_nodes = std::max(max_nodes, patch[fI].size());
     }
+    // get max across MPI ranks.
+    // Sometimes it might happen that rank i
+    // only has triangles but rank j also
+    // has quadrilaterals. Need to know if
+    // this is the case.
+    reduce(max_nodes, maxOp<label>(), max_nodes);
 
     // iterate over faces in the "front" patch, and
     // fill the elements with the global id of each point
