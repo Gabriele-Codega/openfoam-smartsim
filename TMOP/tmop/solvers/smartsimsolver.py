@@ -6,6 +6,8 @@ import os
 import time
 
 from typing import TYPE_CHECKING
+
+from torch.profiler import ProfilerActivity, profile, schedule
 if TYPE_CHECKING:
     from ..config import MotionConfig
 from ..mesh import Mesh
@@ -19,6 +21,7 @@ class SmartSimMotionSolver:
         self.distances_key      = lambda i: f"distances_MPI_{i}"
         self.displacements_key  = lambda i: f"displacements_MPI_{i}"
         self.elements_key       = lambda i: f"elements_MPI_{i}"
+        self.elements_area_key  = lambda i: f"elements_area_MPI_{i}"
 
         default_device = "cuda" if torch.cuda.is_available() else "cpu"
         self.device = conf.device if conf.device else default_device
@@ -70,7 +73,16 @@ class SmartSimMotionSolver:
                 with torch.no_grad():
                     self.toptim.mesh.int_pts.copy_(torch.from_numpy(newp[self.int_ids]).to(self.device))
 
+            # self.toptim.optimise()
+            # with profile(
+            #     activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+            #     schedule=schedule(wait=0, warmup=0, active=1, repeat=1),
+            #     on_trace_ready=lambda p: p.export_chrome_trace(f"trace_step_{timestep}.json")
+            # ) as prof:
             self.toptim.optimise()
+            #     prof.step()
+            # print(f"[Profiler] trace written for timestep {timestep}", flush=True)
+
 
             # get the displacements as optimised_points - initial_points
             newdisp = self.mesh.pts.cpu().detach().numpy() - self.points0
@@ -115,6 +127,7 @@ class SmartSimMotionSolver:
         self.global_indices, _               = self._retrieve_point_fields(self.indices_key)
         distance_to_boundary, _         = self._retrieve_point_fields(self.distances_key)
         self.elements, _                = self._retrieve_point_fields(self.elements_key)
+        self.elements_area, _           = self._retrieve_point_fields(self.elements_area_key)
 
         if len(bulk_points) != len(self.global_indices):
             raise RuntimeError("Size mismatch: number of bulk points does not match number of point indices.")
@@ -140,4 +153,5 @@ class SmartSimMotionSolver:
                      boundary_ids=torch.from_numpy(self.bd_ids),
                      interior_ids=torch.from_numpy(self.int_ids),
                      elements=torch.from_numpy(self.elements),
+                     elements_area=torch.from_numpy(self.elements_area),
             )

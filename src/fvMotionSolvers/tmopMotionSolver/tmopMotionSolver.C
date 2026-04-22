@@ -300,12 +300,14 @@ void Foam::tmopMotionSolver::writeMeshElements()
     // fill the elements with the global id of each point
     // in the face.
     std::vector<label> elements_padded(patch.size() * max_nodes);
+    std::vector<scalar> elements_area(patch.size());
     forAll(patch, fI)
     {
         const auto& face = patch[fI];
         const label& el_size = face.size();
 
         // labelList global_f = globalIDs.toGlobal(face);
+        elements_area[fI] = mag(patch.faceAreas()[fI]);
 
         label row = fI * max_nodes;
         for (label j = 0; j < max_nodes; j++)
@@ -322,6 +324,13 @@ void Foam::tmopMotionSolver::writeMeshElements()
         SRMemLayoutContiguous
     );
 
+    client_.put_tensor(
+        rankElementsAreaName_,
+        elements_area.data(),
+        {size_t(patch.size())},
+        SRTensorTypeDouble,
+        SRMemLayoutContiguous
+    );
 }
 
 void Foam::tmopMotionSolver::matchFrontAndBack()
@@ -401,6 +410,7 @@ Foam::tmopMotionSolver::tmopMotionSolver
     rankMeshDisplacementsName_("displacements_MPI_" + std::to_string(Pstream::myProcNo())),
     rankMeshDistancesName_("distances_MPI_" + std::to_string(Pstream::myProcNo())),
     rankElementsName_("elements_MPI_" + std::to_string(Pstream::myProcNo())),
+    rankElementsAreaName_("elements_area_MPI_" + std::to_string(Pstream::myProcNo())),
     boundaryPoints_(),
     boundaryDisplacements_()
 {
@@ -444,6 +454,7 @@ tmopMotionSolver
     rankMeshDisplacementsName_("displacements_MPI_" + std::to_string(Pstream::myProcNo())),
     rankMeshDistancesName_("distances_MPI_" + std::to_string(Pstream::myProcNo())),
     rankElementsName_("elements_MPI_" + std::to_string(Pstream::myProcNo())),
+    rankElementsAreaName_("elements_area_MPI_" + std::to_string(Pstream::myProcNo())),
     boundaryPoints_(),
     boundaryDisplacements_()
 {

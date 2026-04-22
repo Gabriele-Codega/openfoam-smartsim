@@ -90,6 +90,7 @@ class tmopMotionSolver
         const word rankMeshDisplacementsName_;
         const word rankMeshDistancesName_;
         const word rankElementsName_;
+        const word rankElementsAreaName_;
 
         // - Flattened boundary points sent to SmartRedis for ML
         std::vector<double> boundaryPoints_;

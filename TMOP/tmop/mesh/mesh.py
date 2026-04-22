@@ -11,6 +11,7 @@ class Mesh(nn.Module):
                  boundary_ids,
                  interior_ids,
                  elements,
+                 elements_area,
                 ):
         super().__init__()
 
@@ -34,13 +35,16 @@ class Mesh(nn.Module):
             torch.argsort(storage_order)
         )
 
-        self.elements = elements # assume elements are a padded tensor of node ids
+        self.register_buffer("elements", elements) # assume elements are a padded tensor of node ids
         self.n_elements = elements.shape[0]
         self.n_sides = torch.sum(elements >= 0, dim=1, dtype=torch.int)
         self.n_sides_unique, self.n_sides_count = torch.unique(self.n_sides, return_counts=True)
-        # self.el_dataset = TensorDataset(torch.range(0,self.n_elements-1,dtype = torch.int))
-        self.el_dataset = TensorDataset(self.interior_ids)
+        self.register_buffer("elements_area", elements_area.detach())
 
     @property
     def pts(self):
         return torch.cat([self.bd_pts, self.int_pts], dim=0)[self.inverse_perm]
+
+    @property
+    def pts_all(self):
+        return self.pts[self.elements]

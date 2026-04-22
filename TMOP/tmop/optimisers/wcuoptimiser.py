@@ -13,98 +13,89 @@ class WCUOptimiser(TMOPOptimiser):
                  log_client = None 
                  ):
         super().__init__(mesh, config, log_client)
-        # self.untangle = metric_config.untangle
         # parameters for untangling metric
         metric_config = config.metric
         assert (metric_config.c is not None) and (metric_config.d is not None), "WCU optimiser requires parameters `c` and `d`."
-        self.c: float = metric_config.c
-        self.d: float = metric_config.d
+        self.register_buffer("c", torch.tensor(metric_config.c))
+        self.register_buffer("d", torch.tensor(metric_config.d))
 
     def optimise(self):
         self._reset_optimisation()
-        self.t = 0 # tracks minimum tau
-        self.beta = torch.inf # tracks maximum mu_hat
-        self.best = torch.inf
-        self.n_bad_epochs = 0
-        for epoch in range(self.max_epochs):
-            self.batch_mean_loss = 0
-            self.batch_mean_beta = 0
-            self.batch_worst_t = 0
-            for batch, indices in enumerate(self.el_dataloader):
-                loss = 0
-                indices = indices[0]
-                el_mask = torch.isin(self.mesh.elements, indices)
-                el = self.mesh.elements[el_mask.any(dim=1)]
-                grads = self.reference.shape_grad_all[el_mask.any(dim=1)]
+        while not self._should_stop():
+            self.loss = self._step()
+            self._adjust_lr()
 
-                # A = shape_grad @ pts[elements], with the correct grad selected depending on the type of element
-                pts_all = self.mesh.pts[el]
-                A = torch.einsum("epsi,esj->epij", grads, pts_all) # (n_elements, n_samples, n_sides, spacedim), (n_elements, n_sides, spacedim) -> (n_elements, n_samples, spacedim, spacedim)
-                try:
-                    T = (A @ self.W_inv[el_mask.any(dim=1)]).reshape(-1,2,2)
-                except IndexError: # workaround to allow target to be the same for all elements (i.e. just one matrix)
-                    T = (A @ self.W_inv).reshape(-1,2,2)
+            if self.untangle:
+                self.untangle = (self.t < 0).item()
 
-                loss = self._compute_metric(T)
-                self.batch_mean_loss += loss
-                self.batch_mean_beta += self.beta
-                self.batch_worst_t = min(self.t, self.batch_worst_t)
+            # log stuff
+            self._log_dict["epoch"] = self.epoch
+            self._log_dict["loss"]  = self.loss
+            self._log_dict["t"]     = self.t
+            self._log_dict["beta"]  = self.beta
+            self._log()
 
-                self.optimiser.zero_grad()
-                loss.backward()
-                mask = torch.isin(self.mesh.interior_ids,indices)
-                self.mesh.int_pts.grad[~mask].zero_()
-                self.optimiser.step()
+    def _step(self):
+        loss = 0
+        T = self._compute_weighted_jacobian()
+        _loss = self._compute_loss(T)
+        loss = (_loss.mean(dim=-1)/self.mesh.elements_area).sum()
+        self.optimiser.zero_grad()
+        loss.backward()
+        self.optimiser.step()
+        self.epoch += 1
+        return loss
 
-                # log stuff
-                self._log_dict["epoch"] = epoch
-                self._log_dict["batch"] = batch
-                self._log_dict["loss"] = loss
-                self._log_dict["t"] = self.t
-                self._log_dict["beta"] = self.beta
-                _sched = self.t_scheduler if self.batch_worst_t<0 else self.scheduler
-                self._log_dict["lr"] = _sched.get_last_lr()[0]
-                self._log()
+    def _compute_weighted_jacobian(self):
+        A = torch.einsum("epsi,esj->epij", 
+                         self.reference.shape_grad_all, 
+                         self.mesh.pts_all) # (n_elements, n_samples, n_sides, spacedim), (n_elements, n_sides, spacedim) -> (n_elements, n_samples, spacedim, spacedim)
+        return A @ self.W_inv
 
-            self.batch_mean_loss /= self.n_batches
-            self.batch_mean_beta /= self.n_batches
-            _sched = self.t_scheduler if self.batch_worst_t<0 else self.scheduler
-            _met = self.batch_worst_t if self.batch_worst_t<0 else self.batch_mean_beta
-            try:
-                _sched.step()
-            except:
-                _sched.step(metrics=_met)
-            if self._should_stop():
-                break
-        print()
+    def _compute_loss(self, T):
+        if self.untangle :
+            return self._untangle_loss(T)
+        else:
+            return self._worst_case_loss(T)
 
-    def _compute_metric(self, T):
+    def _untangle_loss(self, T):
         tau = torch.linalg.det(T)
-        min_tau = tau.min().item()
-        self.t = 0.0 if min_tau > 0.0 else min_tau * ( 1 + self.c)
+        min_tau = tau.min().detach()
+        self.t = torch.minimum(torch.zeros_like(min_tau), min_tau * ( 1. + self.c))
+        _loss = (0.5*self.mu(T)/(tau - self.t))
+        return _loss
 
+    def _worst_case_loss(self, T):
+        tau = torch.linalg.det(T)
+        min_tau = tau.min().detach()
+        self.t = torch.minimum(torch.zeros_like(min_tau), min_tau * ( 1. + self.c))
         mu_hat = 0.5*self.mu(T)/(tau - self.t)
-        max_mu_hat = mu_hat.max().item()
-        # self.beta = min(self.beta, max_mu_hat + self.d)
-        self.beta =  max_mu_hat * (1 + self.d)
-        assert torch.all(tau > self.t), f"Invalid t: {self.t} > {tau.min().item()}"
-        assert torch.all(self.beta > mu_hat), f"Invalid beta: {self.beta} < {mu_hat.max().item()}"
+        max_mu_hat = mu_hat.max().detach()
+        self.beta =  max_mu_hat * (1. + self.d)
+        _loss = (mu_hat/(self.beta - mu_hat))
+        return _loss
 
-        # wcuo as in Worst Case Untangle Optimise (or something like that)
-        wcuo = mu_hat/(self.beta - mu_hat)
-        return wcuo.mean()
+    def _adjust_lr(self):
+        _sched  = self.t_scheduler if self.untangle else self.scheduler
+        _met    = self.t if self.untangle else self.beta
+        try:
+            _sched.step()
+        except:
+            _sched.step(metrics=_met)
 
     def _should_stop(self):
-        assert self.batch_mean_loss < torch.inf, "Loss blew up, stopping."
-
-        self.n_bad_epochs *= (self.batch_worst_t >= 0)
-        if (self.batch_mean_beta < self.best) and abs((self.batch_mean_beta - self.best)/self.best) > self.rtol:
-            self.n_bad_epochs = 0
-            self.best = self.batch_mean_beta
+        if not self.untangle:
+            if torch.any((self.best - self.beta)/self.beta > self.rtol):
+                self.n_bad_epochs = 0
+                self.best = self.beta
+            else:
+                self.n_bad_epochs += 1
+            should_stop = (self.n_bad_epochs > self.patience) \
+                        | (self.beta < self.stopping_threshold) \
+                        | (self.epoch > self.max_epochs)
         else:
-            self.n_bad_epochs += 1
-
-        return self.n_bad_epochs > self.patience
+            should_stop = False
+        return should_stop 
 
     def _setup_optimisation(self, optim_config):
         super()._setup_optimisation(optim_config)
@@ -114,4 +105,6 @@ class WCUOptimiser(TMOPOptimiser):
     def _reset_optimisation(self):
         super()._reset_optimisation()
         self.t_scheduler.load_state_dict(self._t_sched_state0)
-
+        self.untangle = True
+        self.t = torch.tensor(-1.,device=self.mesh.pts.device) # tracks minimum tau
+        self.beta = torch.full_like(self.t,float("inf")) # tracks maximum mu_hat

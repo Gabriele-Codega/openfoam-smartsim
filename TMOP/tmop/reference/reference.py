@@ -22,7 +22,8 @@ class Reference(nn.Module):
         self._make_ref_elements()
 
         self.n_sample_pts = config.n_samples
-        self._sample_ref_element()
+        # self._sample_ref_element()
+        self._sample_ref_sides()
 
         # Register buffer for shape gradients, so that 
         # they can be automatically moved to GPU if needed.
@@ -62,6 +63,47 @@ class Reference(nn.Module):
                     U,S,V = torch.linalg.svd(phys - phys.mean(dim=1).unsqueeze(1), full_matrices = False)
                     ref = (U@V)
                     self.ref_elements[ns.item()] = ref
+
+    def _sample_ref_sides(self):
+        self.sample_points = {}
+        for n_sides, ref_el in self.ref_elements.items():
+            # we want n_sample_points points in total. So we evenly distribute those in the n_sides triangles
+            # in a round-robin fashion (i.e. optional small imbalance)
+            n_pts_base = self.n_sample_pts//n_sides 
+            rem = self.n_sample_pts % n_sides
+            n_pts_per_side = torch.tensor([n_pts_base + (i < rem) for i in range(n_sides)],dtype=torch.int) #(n_sides,)
+
+            batch_shape = ref_el.shape[:-2]
+            idx = torch.arange(n_sides, dtype=torch.int)
+            sides = torch.stack((idx,torch.roll(idx,1)),dim=-1) # (n_sides, 2)
+
+            pts = ref_el[...,sides,:] 
+            samples_list = []
+
+            for i in range(n_sides):
+                k = n_pts_per_side[i].item()
+
+                # evenly spaced in (0,1)
+                t = torch.arange(1, k + 1)
+                t = (t / (k + 1)).view(*([1] * len(batch_shape)), k, 1)
+                # shape: (..., k, 1) via broadcasting
+
+                p0 = pts[..., i, 0, :]  # (..., dim)
+                p1 = pts[..., i, 1, :]
+
+                # expand to (..., k, dim)
+                p0 = p0.unsqueeze(-2)
+                p1 = p1.unsqueeze(-2)
+
+                s = (1 - t) * p0 + t * p1  # (..., k, dim)
+
+                samples_list.append(s)
+
+            samples = torch.cat(samples_list, dim=-2)  # (..., n_sample_pts, dim)
+
+            name = f"samples_{n_sides}"
+            self.register_buffer(name, samples.detach())
+            self.sample_points[n_sides] = name
 
     def _sample_ref_element(self):
         # Sample uniformly from a unit trianlge
