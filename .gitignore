@@ -235,3 +235,11 @@ applications/**/Make
 
 # python install
 *egg-info
+
+# postprocessing
+*.mp4
+*.avi
+*.pvsm
+
+# config
+*.yaml

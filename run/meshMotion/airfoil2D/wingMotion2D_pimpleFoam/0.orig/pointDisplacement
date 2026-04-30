@@ -1,0 +1,118 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+| =========                 |                                                 |
+| \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox           |
+|  \\    /   O peration     | Version:  v2506                                 |
+|   \\  /    A nd           | Website:  www.openfoam.com                      |
+|    \\/     M anipulation  |                                                 |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       pointVectorField;
+    object      pointDisplacement;
+}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+dimensions      [0 1 0 0 0 0 0];
+
+internalField   uniform (0 0 0);
+
+boundaryField
+{
+    wing
+    {
+        type            codedFixedValue;
+        value           uniform (0 0 0);
+        name            airfoilMotion;
+        codeInclude
+        #{
+            #include "pointIOField.H"
+        #};
+        code
+        #{
+            const scalar t        = this->db().time().value();
+            const scalar maxY     = 1.5;
+            const scalar maxTheta = 20.0 * M_PI / 180.0;
+            const scalar omega    = M_PI;
+
+            const scalar y     =  maxY     * Foam::sin(omega * t);
+            const scalar theta =  maxTheta * (1-Foam::cos(omega * t));
+
+            const vector c0(0.1, 0.0, 0.0);
+
+            const scalar cosT = Foam::cos(theta);
+            const scalar sinT = Foam::sin(theta);
+
+            // Access mesh directly via the patch — no registry lookup needed
+            const polyMesh& mesh = patch().boundaryMesh().mesh()();
+            const Time& runTime  = mesh.time();
+
+            word instance = runTime.findInstance
+            (
+                mesh.meshDir(),
+                "points0",
+                IOobject::READ_IF_PRESENT
+            );
+
+            IOobject io
+            (
+                "points0",
+                instance,
+                polyMesh::meshSubDir,
+                mesh,
+                IOobject::MUST_READ,
+                IOobject::NO_WRITE,
+                false
+            );
+
+            if
+            (
+                instance == runTime.constant()
+             && !io.typeHeaderOk<pointIOField>()
+            )
+            {
+                io.rename("points");
+            }
+
+            const pointIOField meshPoints0(io);
+
+            const labelList& patchPtIDs = patch().meshPoints();
+            vectorField disp(patchPtIDs.size());
+
+            forAll(patchPtIDs, i)
+            {
+                const vector p0 = meshPoints0[patchPtIDs[i]];
+
+                const vector r(p0.x() - c0.x(),
+                               p0.y() - c0.y(),
+                               0.0);
+
+                const scalar xPrime = cosT*r.x() - sinT*r.y() + c0.x();
+                const scalar yPrime = sinT*r.x() + cosT*r.y() + c0.y() + y;
+
+                disp[i] = vector(xPrime, yPrime, p0.z()) - p0;
+            }
+            operator==(disp);
+        #};
+    }
+
+    front
+    {
+        type            empty;
+    }
+
+    back
+    {
+        type            empty;
+    }
+
+    ".*"
+    {
+        type            fixedValue;
+        value           uniform (0 0 0);
+    }
+}
+
+
+// ************************************************************************* //

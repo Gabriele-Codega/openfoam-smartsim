@@ -1,0 +1,71 @@
+#!/bin/sh
+cd "${0%/*}" || exit                                # Run from this directory
+. ${WM_PROJECT_DIR:?}/bin/tools/RunFunctions        # Tutorial run functions
+#------------------------------------------------------------------------------
+
+# Make 3D mesh in slab of cells.
+(
+    cd wingMotion_snappyHexMesh || exit
+
+    mkdir -p constant/triSurface
+
+    cp -rf \
+        "$FOAM_TUTORIALS"/resources/geometry/wing_5degrees.obj.gz \
+        constant/triSurface/wing_5degrees_orig.obj.gz \
+
+    runApplication surfaceTransformPoints -centre '(0.1 0 0)' -rotate-angle '((0 0 1) -20)' constant/triSurface/wing_5degrees_orig.obj constant/triSurface/wing_5degrees.obj || echo "failed to rotate"
+
+    runApplication blockMesh
+
+    runApplication snappyHexMesh -overwrite
+
+)
+
+# Make a 2D mesh by extruding a patch and solve to steady state.
+(
+    cd wingMotion2D_simpleFoam || exit
+
+    runApplication extrudeMesh
+
+    runApplication createPatch -overwrite
+
+    restore0Dir
+    touch case.foam
+)
+exit
+# Copy mesh from the steady state case, map the results to a mesh motion case,
+# then solve transient.
+(
+    cd wingMotion2D_pimpleFoam || exit
+
+    rm -rf constant/polyMesh
+
+    cp -rf \
+        ../wingMotion2D_simpleFoam/constant/polyMesh \
+        constant
+    cp ../post_process.py .
+
+    restore0Dir
+    cp constant/dynamicMeshDict.laplace constant/dynamicMeshDict
+    touch case.foam
+
+    runApplication mapFields ../wingMotion2D_simpleFoam -sourceTime latestTime -consistent
+
+    mv -f 0/pointDisplacement.unmapped 0/pointDisplacement
+
+    runApplication decomposePar
+
+    runParallel moveDynamicMesh
+
+    # Compute the mesh quality fields 
+    runParallel checkMesh -writeFields '(nonOrthoAngle skewness cellVolume)' 
+
+    runParallel postProcess -dict system/postProcessDict
+
+    runParallel reconstructPar
+
+    # Generate plots of mesh quality samples 
+    python post_process.py
+)
+
+#------------------------------------------------------------------------------

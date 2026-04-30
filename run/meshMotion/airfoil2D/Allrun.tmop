@@ -1,0 +1,73 @@
+#!/bin/sh
+cd "${0%/*}" || exit                                # Run from this directory
+. ${WM_PROJECT_DIR:?}/bin/tools/RunFunctions        # Tutorial run functions
+#------------------------------------------------------------------------------
+
+(
+    cd wingMotion_snappyHexMesh || exit
+
+    mkdir -p constant/triSurface
+
+    cp -rf \
+        "$FOAM_TUTORIALS"/resources/geometry/wing_5degrees.obj.gz \
+        constant/triSurface/wing_5degrees_orig.obj.gz \
+
+    runApplication surfaceTransformPoints -centre '(0.1 0 0)' -rotate-angle '((0 0 1) -20)' constant/triSurface/wing_5degrees_orig.obj constant/triSurface/wing_5degrees.obj || echo "failed to rotate"
+
+    runApplication blockMesh
+
+    runApplication snappyHexMesh -overwrite
+
+)
+
+# Make a 2D mesh by extruding a patch and solve to steady state.
+(
+    cd wingMotion2D_simpleFoam || exit
+
+    runApplication extrudeMesh
+
+    runApplication createPatch -overwrite
+
+    restore0Dir
+)
+
+# Copy mesh from the steady state case, map the results to a mesh motion case,
+# then solve transient.
+(
+    cd wingMotion2D_pimpleFoam || exit
+
+    rm -rf constant/polyMesh
+    cp -rf \
+        ../wingMotion2D_simpleFoam/constant/polyMesh \
+        constant
+
+    restore0Dir
+    cp constant/dynamicMeshDict.tmop constant/dynamicMeshDict
+    touch case.foam
+
+    runApplication mapFields ../wingMotion2D_simpleFoam -sourceTime latestTime -consistent
+    mv -f 0/pointDisplacement.unmapped 0/pointDisplacement
+
+    runApplication decomposePar
+
+    cd ..
+
+    echo Run the smartsim_driver that coordinates Machine Learning and CFD 
+    python tmop_smartsim_driver.py --experiment tmopMotion --case wingMotion2D_pimpleFoam
+)
+
+(
+    cd tmopMotion/wingMotion2D_pimpleFoam || exit
+
+    # Compute the mesh quality fields 
+    runParallel checkMesh -writeFields '(nonOrthoAngle skewness cellVolume)' 
+
+    runParallel postProcess -dict system/postProcessDict
+
+    runParallel reconstructPar
+
+    # Generate plots of mesh quality samples 
+    python post_process.py
+)
+
+#------------------------------------------------------------------------------
