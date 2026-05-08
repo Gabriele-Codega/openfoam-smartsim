@@ -107,7 +107,7 @@ class Reference(nn.Module):
 
     def _sample_ref_element(self):
         # Sample uniformly from a unit trianlge
-        u1,u2 = torch.rand(size=(2,self.n_sample_pts), dtype=torch.float64)
+        u1,u2 = torch.rand(size=(2,self.n_sample_pts))
         x = 1-torch.sqrt(u1)
         y = (1-x)*u2
         tri_samples = torch.stack([x, y], dim = -1)

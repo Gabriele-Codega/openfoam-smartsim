@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data import TensorDataset
 
-torch.set_default_dtype(torch.float64)
+# torch.set_default_dtype(torch.float64)
 
 class Mesh(nn.Module):
     def __init__(self, 
@@ -40,6 +40,7 @@ class Mesh(nn.Module):
         self.n_sides = torch.sum(elements >= 0, dim=1, dtype=torch.int)
         self.n_sides_unique, self.n_sides_count = torch.unique(self.n_sides, return_counts=True)
         self.register_buffer("elements_area", elements_area.detach())
+        self.register_buffer("elements_area_inv", 1./elements_area.detach())
 
     @property
     def pts(self):
