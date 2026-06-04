@@ -10,8 +10,7 @@ class WCUOptimiser(TMOPOptimiser):
     def __init__(self,
                  mesh: Mesh,
                  config: "TMOPConfig",
-                 log_client = None 
-                 ):
+                 log_client = None ):
         super().__init__(mesh, config, log_client)
         # parameters for untangling metric
         metric_config = config.metric
@@ -40,6 +39,8 @@ class WCUOptimiser(TMOPOptimiser):
                 self._log_dict["loss"]  = self.loss.item()
                 self._log_dict["t"]     = self.t.item()
                 self._log_dict["beta"]  = self.beta.item()
+                self._log_dict["nbe"]  = self.n_bad_epochs.item()
+                self._log_dict["mss"]  = self._get_max_step_size().item()
                 self._log()
                 break
         # p.export_chrome_trace("./profiler_trace.json")
@@ -51,7 +52,7 @@ class WCUOptimiser(TMOPOptimiser):
         _loss, t, beta = self._compute_loss(T)
         self.t = t.detach()
         self.beta = beta.detach()
-        loss = (_loss.mean(dim=-1)*self.mesh.elements_area_inv).sum()
+        loss = (_loss.mean(dim=-1)*self.mesh.elements_area_inv).sum()/self.mesh.elements_area_inv_sum
         self.optimiser.zero_grad()
         loss.backward()
         self.optimiser.step()
@@ -60,7 +61,6 @@ class WCUOptimiser(TMOPOptimiser):
     def _compute_weighted_jacobian(self):
         sg : torch.Tensor = self.reference.shape_grad_all  # (n_el, n_pts, n_sides, sdim)
         pts = self.mesh.pts_all             # (n_el, n_sides, sdim)
-        # n_el, n_pts, n_sides, sdim = sg.shape
 
         A00 = (sg[...,0] * pts[:,None,:,0]).sum(dim=-1)
         A01 = (sg[...,0] * pts[:,None,:,1]).sum(dim=-1)
@@ -68,25 +68,15 @@ class WCUOptimiser(TMOPOptimiser):
         A11 = (sg[...,1] * pts[:,None,:,1]).sum(dim=-1)
         A = torch.stack((torch.stack((A00,A01), dim=-1),
                          torch.stack((A10,A11), dim=-1)),dim=-2)
-        # Reshape sg: (n_el, n_pts, n_sides, sdim) -> (n_el, n_pts*sdim, n_sides)
-        # pts:        (n_el, n_sides, sdim)
-        # bmm gives: (n_el, n_pts*sdim, sdim)
-        # then reshape to (n_el, n_pts, sdim, sdim)
-        # TODO : DIRECTLY CHANGE STORAGE ORDER OF SHAPE_GRAD_ALL TO BE CONTIGUOUS
-        # sg_r = sg.permute(0, 1, 3, 2).reshape(n_el, n_pts * sdim, n_sides)  # contiguous after reshape
-        # TODO : CONSIDER INLINING THIS AS WELL
-        # A = torch.bmm(sg_r, pts).reshape(n_el, n_pts, sdim, sdim)
         # A = torch.einsum("epsi,esj->epij", 
         #                  self.reference.shape_grad_all, 
         #                  self.mesh.pts_all) # (n_elements, n_samples, n_sides, spacedim), (n_elements, n_sides, spacedim) -> (n_elements, n_samples, spacedim, spacedim)
-        # TODO : INLINE THIS
         T00 = (A[...,0,:] * self.W_inv[...,:,0]).sum(dim=-1)
         T01 = (A[...,0,:] * self.W_inv[...,:,1]).sum(dim=-1)
         T10 = (A[...,1,:] * self.W_inv[...,:,0]).sum(dim=-1)
         T11 = (A[...,1,:] * self.W_inv[...,:,1]).sum(dim=-1)
         return torch.stack((torch.stack((T00,T01), dim=-1),
                             torch.stack((T10,T11), dim=-1)),dim=-2)
-        # return A @ self.W_inv
 
     def _compute_loss(self, T):
         return torch.cond(self.untangle,
@@ -94,7 +84,6 @@ class WCUOptimiser(TMOPOptimiser):
                           self._worst_case_loss,
                           (T,)
                           )
-        # return self._worst_case_loss(T)
 
     def _untangle_loss(self, T):
         tau = T[..., 0, 0]*T[..., 1, 1] - T[..., 0, 1]*T[..., 1, 0]

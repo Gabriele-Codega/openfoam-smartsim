@@ -32,12 +32,12 @@ boundaryField
         code
         #{
             const scalar t        = this->db().time().value();
-            const scalar maxY     = 1.5;
+            const scalar maxY     = 0.75;
             const scalar maxTheta = 20.0 * M_PI / 180.0;
             const scalar omega    = M_PI;
 
-            const scalar y     =  maxY     * Foam::sin(omega * t);
-            const scalar theta =  maxTheta * (1-Foam::cos(omega * t));
+            const scalar y     =  -maxY     * Foam::cos(omega * t) + maxY;
+            const scalar theta =  -maxTheta * Foam::sin(omega * t);
 
             const vector c0(0.1, 0.0, 0.0);
 

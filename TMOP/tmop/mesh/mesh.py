@@ -41,6 +41,7 @@ class Mesh(nn.Module):
         self.n_sides_unique, self.n_sides_count = torch.unique(self.n_sides, return_counts=True)
         self.register_buffer("elements_area", elements_area.detach())
         self.register_buffer("elements_area_inv", 1./elements_area.detach())
+        self.register_buffer("elements_area_inv_sum", self.elements_area_inv.sum().detach())
 
     @property
     def pts(self):

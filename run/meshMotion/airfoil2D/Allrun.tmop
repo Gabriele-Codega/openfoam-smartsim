@@ -12,8 +12,8 @@ cd "${0%/*}" || exit                                # Run from this directory
         "$FOAM_TUTORIALS"/resources/geometry/wing_5degrees.obj.gz \
         constant/triSurface/wing_5degrees_orig.obj.gz \
 
-    runApplication surfaceTransformPoints -centre '(0.1 0 0)' -rotate-angle '((0 0 1) -20)' constant/triSurface/wing_5degrees_orig.obj constant/triSurface/wing_5degrees.obj || echo "failed to rotate"
-
+    # runApplication surfaceTransformPoints -centre '(0.1 0 0)' -rotate-angle '((0 0 1) -20)' constant/triSurface/wing_5degrees_orig.obj constant/triSurface/wing_5degrees.obj || echo "failed to rotate"
+    #
     runApplication blockMesh
 
     runApplication snappyHexMesh -overwrite
@@ -64,7 +64,7 @@ cd "${0%/*}" || exit                                # Run from this directory
 
     runParallel postProcess -dict system/postProcessDict
 
-    runParallel reconstructPar
+    reconstructPar -withZero
 
     # Generate plots of mesh quality samples 
     python post_process.py

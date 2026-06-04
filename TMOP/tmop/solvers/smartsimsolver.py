@@ -138,8 +138,8 @@ class SmartSimMotionSolver:
 
         # initialise the mesh object
         self.mesh = Mesh(
-                     boundary_points=torch.from_numpy(self.nodes[self.bd_ids]), 
-                     interior_points=torch.from_numpy(self.nodes[self.int_ids]), 
+                     boundary_points=torch.from_numpy(self.nodes[self.bd_ids]).to(torch.get_default_dtype()), 
+                     interior_points=torch.from_numpy(self.nodes[self.int_ids]).to(torch.get_default_dtype()), 
                      boundary_ids=torch.from_numpy(self.bd_ids),
                      interior_ids=torch.from_numpy(self.int_ids),
                      elements=torch.from_numpy(self.elements),

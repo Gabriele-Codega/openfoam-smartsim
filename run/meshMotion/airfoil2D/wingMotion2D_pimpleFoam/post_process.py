@@ -47,7 +47,7 @@ filename   = 'volFieldValue.dat'
 data_dir   = os.path.join(base_dir, sub_dir, case_dir)
 dat_path   = os.path.join(data_dir, filename)
 csv_path   = os.path.join(data_dir, 'fieldMinMax.csv')
-output_path   = os.path.join(base_dir, 'mentrics.png')
+output_path   = os.path.join(base_dir, 'metrics.png')
 
 df_mean = pd.read_table(
     dat_path,

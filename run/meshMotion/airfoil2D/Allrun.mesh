@@ -13,7 +13,7 @@ cd "${0%/*}" || exit                                # Run from this directory
         "$FOAM_TUTORIALS"/resources/geometry/wing_5degrees.obj.gz \
         constant/triSurface/wing_5degrees_orig.obj.gz \
 
-    runApplication surfaceTransformPoints -centre '(0.1 0 0)' -rotate-angle '((0 0 1) -20)' constant/triSurface/wing_5degrees_orig.obj constant/triSurface/wing_5degrees.obj || echo "failed to rotate"
+    # runApplication surfaceTransformPoints -centre '(0.1 0 0)' -rotate-angle '((0 0 1) -20)' constant/triSurface/wing_5degrees_orig.obj constant/triSurface/wing_5degrees.obj || echo "failed to rotate"
 
     runApplication blockMesh
 
@@ -32,7 +32,7 @@ cd "${0%/*}" || exit                                # Run from this directory
     restore0Dir
     touch case.foam
 )
-exit
+# exit
 # Copy mesh from the steady state case, map the results to a mesh motion case,
 # then solve transient.
 (
@@ -62,7 +62,7 @@ exit
 
     runParallel postProcess -dict system/postProcessDict
 
-    runParallel reconstructPar
+    reconstructPar -withZero
 
     # Generate plots of mesh quality samples 
     python post_process.py

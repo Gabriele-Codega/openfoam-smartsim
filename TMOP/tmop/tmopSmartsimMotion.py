@@ -4,7 +4,6 @@ import tmop
 
 def main()->int:
     set_docstring_parse_options(attribute_docstrings=True)
-    torch.set_default_dtype(torch.float64)
     parser = ArgumentParser(description="TMOP for mesh motion.")
     parser.add_argument("--config", action="config")
     parser.add_class_arguments(tmop.MotionConfig, "motion")
@@ -12,6 +11,7 @@ def main()->int:
     args = parser.parse_args()
     cfg: tmop.MotionConfig = args.motion
 
+    torch.set_default_dtype(cfg.dtype)
     solver = tmop.SmartSimMotionSolver(cfg)
     solver.solve()
 

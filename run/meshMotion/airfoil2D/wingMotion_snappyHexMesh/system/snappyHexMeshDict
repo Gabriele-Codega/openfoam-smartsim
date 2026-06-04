@@ -28,18 +28,18 @@ addLayers       true;
 // - to 'snap' the mesh boundary to the surface
 geometry
 {
-    wing_5degrees.obj
+    wing_5degrees_orig.obj
     {
         type    triSurfaceMesh;
         name    wing;
     }
 
-    //refinementBox
-    //{
-    //    type    box;
-    //    min     (-1 -1 -1);
-    //    max     ( 5  1  1);
-    //}
+    refinementBox
+    {
+        type    box;
+        min     (-1 -1 -1);
+        max     ( 5  1  1);
+    }
 }
 
 
@@ -71,8 +71,8 @@ castellatedMeshControls
     // Number of buffer layers between different levels.
     // 1 means normal 2:1 refinement restriction, larger means slower
     // refinement.
-    //nCellsBetweenLevels 6;
-    nCellsBetweenLevels 3;
+    nCellsBetweenLevels 6;
+    //nCellsBetweenLevels 3;
 
 
 
@@ -99,14 +99,14 @@ castellatedMeshControls
         wing
         {
             // Surface-wise min and max refinement level
-            //level (5 5);
-            level (3 5);
+            level (5 5);
+            //level (3 5);
         }
     }
 
     // Resolve sharp angles on fridges
-    //resolveFeatureAngle 30;
-    resolveFeatureAngle 180;
+    resolveFeatureAngle 30;
+    //resolveFeatureAngle 180;
 
 
     // Region-wise refinement
@@ -127,7 +127,7 @@ castellatedMeshControls
         refinementBox
         {
             mode inside;
-            levels ((1e15 1));
+            levels ((1e15 2));
         }
     }
 
